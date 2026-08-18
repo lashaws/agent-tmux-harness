@@ -9,11 +9,15 @@ The "prefix" is **Ctrl-b** — press it, release, then press the next key.
 |----------------------------|------------------------------------------|
 | Split side-by-side         | `Ctrl-b` then `\|`                        |
 | Split top/bottom           | `Ctrl-b` then `-`                         |
-| Move between panes         | `Alt+arrow keys` (or just click a pane)   |
-| Resize a pane              | drag the border with the mouse            |
+| Move between panes         | click a pane, or `Ctrl-b` then an arrow key |
+| Resize a pane              | drag the border with the mouse, or `Ctrl-b` then `Option+arrow` |
 | Zoom a pane full-screen    | `Ctrl-b` then `z` (again to un-zoom)      |
 | Close a pane               | type `exit` (or `Ctrl-d`)                 |
 | Scroll back                | mouse wheel; `q` to jump back to live     |
+
+Note: `Option+arrow` on its own does **not** switch panes — this iTerm profile sends
+it to your shell as jump-one-word-left/right. Pane moves always need the `Ctrl-b`
+prefix first (or just click).
 
 ## Sessions (your workspaces — survive closing the window)
 

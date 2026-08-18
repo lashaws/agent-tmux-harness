@@ -8,10 +8,10 @@ Clone it on any Mac and run one command to get an identical terminal.
 Requires [Homebrew](https://brew.sh) and the GitHub CLI (`brew install gh`, then `gh auth login`).
 
 ```bash
-mkdir -p ~/Dev
-gh repo clone lashaws/dotfiles ~/Dev/dotfiles
-ln -s ~/Dev/dotfiles ~/dotfiles          # convenience symlink, optional
-bash ~/Dev/dotfiles/terminal-setup.sh
+mkdir -p ~/Work/dev
+gh repo clone lashaws/dotfiles ~/Work/dev/dotfiles
+ln -s ~/Work/dev/dotfiles ~/dotfiles          # convenience symlink, optional
+bash ~/Work/dev/dotfiles/terminal-setup.sh
 ```
 
 Quit iTerm once with `Cmd-Q` and reopen it afterwards.
@@ -19,7 +19,7 @@ Quit iTerm once with `Cmd-Q` and reopen it afterwards.
 ## Existing machine — pull latest and re-apply
 
 ```bash
-bash ~/Dev/dotfiles/update.sh
+bash ~/Work/dev/dotfiles/update.sh
 ```
 
 That pulls from GitHub and re-runs the setup. It is safe to run repeatedly:
@@ -31,7 +31,7 @@ added once.
 Edit the files here, then push so every other machine can pick them up:
 
 ```bash
-cd ~/Dev/dotfiles
+cd ~/Work/dev/dotfiles
 git add -A && git commit -m "describe the change" && git push
 ```
 

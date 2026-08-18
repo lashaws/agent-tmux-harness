@@ -1,6 +1,6 @@
 #!/bin/bash
 # update.sh — pull the latest setup from GitHub and apply it to this machine.
-# Usage:  bash ~/dotfiles/update.sh
+# Usage:  bash ~/Work/dev/dotfiles/update.sh
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
