@@ -1,0 +1,84 @@
+#!/bin/sh
+# tmux-last-output — grab the output of the LAST shell command in a tmux pane
+# (or the whole scrollback), no matter how many thousands of lines it is.
+#
+# Relies on zsh hooks in ~/.zsh/tmux-last-output.zsh, which stamp each pane
+# with @cmd_start / @cmd_end (absolute scrollback line numbers) around every
+# command. If a command is still running, "end" is the bottom of the pane.
+#
+# usage: tmux-last-output [-t pane] MODE
+#   copy       last command's output -> macOS clipboard          (prefix y)
+#   file       last command's output -> ~/Downloads/tmux-out-*.txt, opened (prefix Y)
+#   all        entire scrollback     -> macOS clipboard          (prefix S)
+#   all-file   entire scrollback     -> ~/Downloads/tmux-out-*.txt, opened
+#   print      last command's output -> stdout (for scripting / testing)
+set -eu
+
+pane="${TMUX_PANE:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t) pane="$2"; shift 2 ;;
+    *) mode="$1"; shift ;;
+  esac
+done
+mode="${mode:-copy}"
+[ -n "$pane" ] || { echo "tmux-last-output: no target pane" >&2; exit 1; }
+
+# Current pane geometry. capture-pane counts lines with 0 = top of the visible
+# screen and negatives reaching back into history, so absolute -> relative is
+# just "minus history_size".
+set -- $(tmux display -p -t "$pane" '#{history_size} #{history_limit} #{cursor_y}')
+hist=$1; limit=$2; cy=$3
+
+capture() {
+  # -p print, -J join wrapped lines (so long lines come back whole)
+  tmux capture-pane -p -J -t "$pane" "$@" \
+    | sed -e 's/[[:space:]]*$//' \
+    | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'   # drop trailing blank lines
+}
+
+case "$mode" in
+  all|all-file)
+    text=$(capture -S -)
+    ;;
+  *)
+    start=$(tmux show -pv -t "$pane" @cmd_start 2>/dev/null || true)
+    end=$(tmux show -pv -t "$pane" @cmd_end 2>/dev/null || true)
+    if [ -z "$start" ]; then
+      tmux display-message -t "$pane" "no command recorded in this pane yet (zsh hooks loaded?)"
+      exit 1
+    fi
+    if [ "$hist" -ge "$limit" ]; then
+      # scrollback is full: the oldest lines have been dropped, so absolute
+      # numbers may be off by however much was trimmed. Still try.
+      tmux display-message -t "$pane" "warning: scrollback full, range may be shifted"
+    fi
+    rel_start=$((start - hist))
+    [ "$rel_start" -lt "$((0 - hist))" ] && rel_start=$((0 - hist))
+    if [ -n "$end" ] && [ "$end" -ge "$start" ]; then
+      text=$(capture -S "$rel_start" -E "$((end - hist))")
+    elif [ -n "$end" ]; then
+      text=""                       # command printed nothing
+    else
+      text=$(capture -S "$rel_start")   # still running: to bottom of pane
+    fi
+    ;;
+esac
+
+lines=$(printf '%s' "$text" | awk 'END{print NR}')
+[ -z "$text" ] && lines=0
+
+case "$mode" in
+  print)
+    printf '%s\n' "$text" ;;
+  copy|all)
+    printf '%s\n' "$text" | pbcopy
+    tmux display-message -t "$pane" "copied $lines lines to clipboard" ;;
+  file|all-file)
+    out="$HOME/Downloads/tmux-out-$(date +%Y%m%d-%H%M%S).txt"
+    printf '%s\n' "$text" > "$out"
+    tmux display-message -t "$pane" "saved $lines lines -> $out"
+    open "$out" ;;
+  *)
+    echo "tmux-last-output: unknown mode '$mode'" >&2; exit 2 ;;
+esac

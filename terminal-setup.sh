@@ -35,8 +35,28 @@ if [ -f "$HOME/.tmux.conf" ] && ! cmp -s "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.co
 fi
 cp "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.conf"
 echo "==> ~/.tmux.conf installed"
-echo "    NOTE: the copy/yank bindings (prefix y/Y/S/C-s) call ~/.local/bin/tmux-last-output,"
-echo "    which lives outside this repo — copy it over separately if you use those keys."
+
+# 3b. Copy-last-output tooling: the prefix y/Y/S/C-s bindings above call this
+# script, which relies on the zsh hooks to know where each command's output
+# starts and ends in the pane's scrollback.
+mkdir -p "$HOME/.local/bin" "$HOME/.zsh"
+cp "$SCRIPT_DIR/tmux-last-output" "$HOME/.local/bin/tmux-last-output"
+chmod +x "$HOME/.local/bin/tmux-last-output"
+cp "$SCRIPT_DIR/tmux-last-output.zsh" "$HOME/.zsh/tmux-last-output.zsh"
+echo "==> ~/.local/bin/tmux-last-output and ~/.zsh/tmux-last-output.zsh installed"
+if ! grep -q 'tmux-last-output.zsh' "$HOME/.zshrc" 2>/dev/null; then
+  cat >> "$HOME/.zshrc" <<'ZSHRC'
+
+# Stamp tmux panes with command output ranges, for prefix y/Y/S/C-s
+[ -f ~/.zsh/tmux-last-output.zsh ] && source ~/.zsh/tmux-last-output.zsh
+ZSHRC
+  echo "==> tmux-last-output source line added to ~/.zshrc"
+else
+  echo "==> tmux-last-output source line already in ~/.zshrc, skipped"
+fi
+if ! command -v pbcopy >/dev/null 2>&1; then
+  echo "    NOTE: pbcopy not found — the clipboard modes (prefix y/S) need macOS."
+fi
 
 cat > "$HOME/tmux-cheatsheet.md" <<'CHEAT'
 # tmux cheat sheet

@@ -44,24 +44,26 @@ git add -A && git commit -m "describe the change" && git push
 | `tmux.conf` | The actual `~/.tmux.conf` — copied in as-is by the setup script |
 | `statusline.sh` | Claude Code status line (path/model/effort + 5h/7d/context usage bars) → installed to `~/.claude/statusline.sh` |
 | `statusline-work.sh` | Thin wrapper for a second ("work") Claude account — prefixes an orange `WORK` tag and delegates to `statusline.sh` → installed to `~/.claude-work/statusline.sh` (skipped if that dir doesn't exist) |
+| `tmux-last-output` | Backs the `prefix y/Y/S/C-s` copy bindings in `tmux.conf` — grabs the last command's output (or whole scrollback) from a pane, any length → installed to `~/.local/bin/tmux-last-output` |
+| `tmux-last-output.zsh` | zsh `preexec`/`precmd` hooks that stamp each pane with where the last command's output starts/ends, so the script above knows what to grab → installed to `~/.zsh/tmux-last-output.zsh`, sourced from `~/.zshrc` |
 | `tmux-cheatsheet.md` | Key bindings reference (also written to `~/tmux-cheatsheet.md` by the setup script) |
 
 ## What the setup script touches
 
 - `~/.tmux.conf` — backed up first, but only if the content actually changes
 - `~/.claude/statusline.sh` and `~/.claude-work/statusline.sh` — backed up first if different (the `.claude-work` one is skipped if that directory doesn't exist)
+- `~/.local/bin/tmux-last-output` and `~/.zsh/tmux-last-output.zsh` — installed, and a source line appended to `~/.zshrc` once
 - `~/tmux-cheatsheet.md`
-- `~/.zshrc` — appends a tmux auto-attach block, once
+- `~/.zshrc` — appends a tmux auto-attach block and a tmux-last-output source line, each once
 
 It does **not** touch iTerm settings. See below.
 
-**Not covered here:** the `prefix y/Y/S/C-s` copy-to-clipboard bindings in `tmux.conf` call
-`~/.local/bin/tmux-last-output` and are wired up by `~/.zsh/tmux-last-output.zsh` — neither is
-in this repo yet. Also, `statusline.sh` only takes effect if that account's
+**One external dependency:** `statusline.sh` only takes effect if that account's
 `~/.claude/settings.json` has:
 ```json
 "statusLine": { "type": "command", "command": "$HOME/.claude/statusline.sh" }
 ```
+That's Claude Code's own config, not something this repo manages.
 
 ## iTerm setup (one-time, manual)
 
