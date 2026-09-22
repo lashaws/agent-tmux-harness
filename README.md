@@ -39,17 +39,29 @@ git add -A && git commit -m "describe the change" && git push
 
 | File | What it does |
 |---|---|
-| `terminal-setup.sh` | Installs tmux + iTerm2, writes `~/.tmux.conf` and `~/tmux-cheatsheet.md`, adds tmux auto-attach to `~/.zshrc` |
+| `terminal-setup.sh` | Installs tmux + iTerm2 app, installs `tmux.conf` and the statusline script(s), writes `~/tmux-cheatsheet.md`, adds tmux auto-attach to `~/.zshrc` |
 | `update.sh` | `git pull` + re-run `terminal-setup.sh` |
+| `tmux.conf` | The actual `~/.tmux.conf` — copied in as-is by the setup script |
+| `statusline.sh` | Claude Code status line (path/model/effort + 5h/7d/context usage bars) → installed to `~/.claude/statusline.sh` |
+| `statusline-work.sh` | Thin wrapper for a second ("work") Claude account — prefixes an orange `WORK` tag and delegates to `statusline.sh` → installed to `~/.claude-work/statusline.sh` (skipped if that dir doesn't exist) |
 | `tmux-cheatsheet.md` | Key bindings reference (also written to `~/tmux-cheatsheet.md` by the setup script) |
 
 ## What the setup script touches
 
 - `~/.tmux.conf` — backed up first, but only if the content actually changes
+- `~/.claude/statusline.sh` and `~/.claude-work/statusline.sh` — backed up first if different (the `.claude-work` one is skipped if that directory doesn't exist)
 - `~/tmux-cheatsheet.md`
 - `~/.zshrc` — appends a tmux auto-attach block, once
 
 It does **not** touch iTerm settings. See below.
+
+**Not covered here:** the `prefix y/Y/S/C-s` copy-to-clipboard bindings in `tmux.conf` call
+`~/.local/bin/tmux-last-output` and are wired up by `~/.zsh/tmux-last-output.zsh` — neither is
+in this repo yet. Also, `statusline.sh` only takes effect if that account's
+`~/.claude/settings.json` has:
+```json
+"statusLine": { "type": "command", "command": "$HOME/.claude/statusline.sh" }
+```
 
 ## iTerm setup (one-time, manual)
 

@@ -1,10 +1,14 @@
 #!/bin/bash
-# terminal-setup.sh — replicate LaShaw's tmux setup on a new Mac.
-# Installs tmux (+ iTerm2 app), writes ~/.tmux.conf and the cheatsheet, and adds
-# the tmux auto-attach block to ~/.zshrc. iTerm appearance/keys are NOT managed
-# here — configure that profile once in the UI (see README).
-# Usage: copy this file to the new machine, then:  bash terminal-setup.sh
+# terminal-setup.sh — replicate LaShaw's tmux + statusline setup on a new Mac.
+# Installs tmux (+ iTerm2 app), installs ~/.tmux.conf, the Claude Code
+# statusline script(s), and the cheatsheet, and adds the tmux auto-attach
+# block to ~/.zshrc. iTerm appearance/keys are NOT managed here — configure
+# that profile once in the UI (see README).
+# Usage: clone the whole dotfiles repo (this script reads sibling files), then:
+#   bash terminal-setup.sh
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Terminal setup: tmux dashboard + auto-attach"
 
@@ -20,71 +24,19 @@ fi
 command -v tmux >/dev/null 2>&1 || brew install tmux
 [ -d "/Applications/iTerm.app" ] || brew install --cask iterm2
 
-# 3. tmux config (backs up any existing one)
+# 3. tmux config (backs up any existing one, only if content actually changed)
 # NOTE: this script deliberately does NOT touch iTerm settings. Writing iTerm
 # prefs from a script is unreliable -- iTerm holds its own in-memory copy and
 # overwrites the plist on quit, so `defaults write` silently reverts. Set the
 # profile up once in the UI instead; see README.
-TMUX_TMP=$(mktemp "${TMPDIR:-/tmp}/tmux.conf.XXXXXX")
-cat > "$TMUX_TMP" <<'TMUXCONF'
-# ~/.tmux.conf — homebase setup
-# Reload after edits: prefix + r  (or: tmux source-file ~/.tmux.conf)
-
-# --- Quality of life ---
-set -g mouse on                       # click panes/windows, scroll, drag to resize
-set -g history-limit 100000           # deep scrollback for long agent output
-set -sg escape-time 10                # no lag after pressing Esc (editors, Claude Code)
-set -g focus-events on
-set -g default-terminal "tmux-256color"
-set -ag terminal-overrides ",xterm-256color:RGB"  # true color
-set -g set-clipboard on               # mouse-select in tmux → macOS clipboard (via iTerm OSC52)
-
-# --- Numbering: start at 1, keep gaps closed ---
-set -g base-index 1
-setw -g pane-base-index 1
-set -g renumber-windows on
-
-# --- Intuitive splits (in addition to default % and ") ---
-bind | split-window -h -c "#{pane_current_path}"
-bind - split-window -v -c "#{pane_current_path}"
-bind c new-window -c "#{pane_current_path}"   # new window keeps current directory
-
-# --- Fast config reload ---
-bind r source-file ~/.tmux.conf \; display-message "tmux config reloaded"
-
-# --- Theme: calm dark dashboard ---
-set -g status-position top
-set -g status-interval 5
-set -g status-left-length 30
-set -g status-style "bg=#181825,fg=#9399b2"
-set -g status-left "#[fg=#181825,bg=#89b4fa,bold] #S #[default]  "
-set -g status-right "#[fg=#9399b2]%a %b %d  #[fg=#cdd6f4,bold]%H:%M "
-setw -g window-status-current-format "#[fg=#cdd6f4,bold]#I:#W"
-setw -g window-status-format "#[fg=#585b70]#I:#W"
-set -g window-status-separator "  "
-set -g message-style "bg=#89b4fa,fg=#181825,bold"
-set -g mode-style "bg=#45475a,fg=#cdd6f4"
-
-# --- Panes: titled borders = the dashboard view ---
-set -g pane-border-style "fg=#313244"
-set -g pane-active-border-style "fg=#89b4fa"
-set -g pane-border-status top
-set -g pane-border-format " #{?pane_active,#[fg=#89b4fa]#[bold],#[fg=#585b70]}#{pane_index} · #{pane_current_command} #[default]"
-set -g pane-border-lines heavy
-
-# --- Keep sessions alive and titles useful ---
-set -g set-titles on
-set -g set-titles-string "#S:#W"
-setw -g automatic-rename on
-TMUXCONF
-# Only back up when the content actually changes, so identical re-runs do not
-# pile up .bak files.
-if [ -f "$HOME/.tmux.conf" ] && ! cmp -s "$TMUX_TMP" "$HOME/.tmux.conf"; then
+if [ -f "$HOME/.tmux.conf" ] && ! cmp -s "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.conf"; then
   cp "$HOME/.tmux.conf" "$HOME/.tmux.conf.bak-$(date +%Y%m%d%H%M%S)"
   echo "==> Existing .tmux.conf backed up"
 fi
-mv "$TMUX_TMP" "$HOME/.tmux.conf"
-echo "==> ~/.tmux.conf written"
+cp "$SCRIPT_DIR/tmux.conf" "$HOME/.tmux.conf"
+echo "==> ~/.tmux.conf installed"
+echo "    NOTE: the copy/yank bindings (prefix y/Y/S/C-s) call ~/.local/bin/tmux-last-output,"
+echo "    which lives outside this repo — copy it over separately if you use those keys."
 
 cat > "$HOME/tmux-cheatsheet.md" <<'CHEAT'
 # tmux cheat sheet
@@ -133,7 +85,24 @@ Config lives at `~/.tmux.conf`. This file: `~/tmux-cheatsheet.md` (delete anytim
 CHEAT
 echo "==> ~/tmux-cheatsheet.md written"
 
-# 4. Auto-attach block in .zshrc (idempotent — skips if already present)
+# 4. Claude Code status line (personal account; work account too if ~/.claude-work exists)
+install_statusline() {
+  local src="$1" dest_dir="$2" dest="$dest_dir/statusline.sh"
+  [ -d "$dest_dir" ] || return 0
+  if [ -f "$dest" ] && ! cmp -s "$src" "$dest"; then
+    cp "$dest" "$dest.bak-$(date +%Y%m%d%H%M%S)"
+    echo "==> Existing $dest backed up"
+  fi
+  cp "$src" "$dest"
+  chmod +x "$dest"
+  echo "==> $dest installed"
+}
+install_statusline "$SCRIPT_DIR/statusline.sh" "$HOME/.claude"
+install_statusline "$SCRIPT_DIR/statusline-work.sh" "$HOME/.claude-work"
+echo "    NOTE: statusline only shows up if that account's settings.json has:"
+echo '      "statusLine": {"type": "command", "command": "$HOME/.claude/statusline.sh"}'
+
+# 5. Auto-attach block in .zshrc (idempotent — skips if already present)
 if ! grep -q 'tmux new-session -A -s home' "$HOME/.zshrc" 2>/dev/null; then
   cat >> "$HOME/.zshrc" <<'ZSHRC'
 
@@ -151,7 +120,7 @@ else
   echo "==> auto-attach already in ~/.zshrc, skipped"
 fi
 
-# 5. Reload tmux if a server is already running
+# 6. Reload tmux if a server is already running
 tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "==> running tmux server reloaded" || true
 
 echo ""
