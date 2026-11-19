@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-work/hooks/notify-input-needed.sh",
+            "command": "$HOME/.claude/hooks/notify-input-needed.sh",
             "timeout": 10
           }
         ]
@@ -122,34 +122,34 @@
     ],
     "soft_deny": [
       "$defaults",
-      "Bash(aws:secretsmanager delete-secret:*) \u2014 scoped to trueage-prod/trueage-test secrets, prod AWS profiles (trueage-prod-admin, trueage-prod-readonly)",
-      "terraform apply targeting infra/envs/prod or infra/envs/prod-dr that Lashaw did not ask for in the current session, or any prod apply while another session has announced a prod hold (e.g. a DR drill) \u2014 protected IaC scope; the [trueage-prod] allow rule covers requested applies"
+      "Bash(aws:secretsmanager delete-secret:*) — scoped to trueage-prod/trueage-test secrets, prod AWS profiles (trueage-prod-admin, trueage-prod-readonly)",
+      "terraform apply targeting infra/envs/prod or infra/envs/prod-dr that Lashaw did not ask for in the current session, or any prod apply while another session has announced a prod hold (e.g. a DR drill) — protected IaC scope; the [trueage-prod] allow rule covers requested applies"
     ],
     "environment": [
       "### Org-wide",
       "**Organization**: Quantum-Retirement-Solutions (GitHub org hosting the trueage repo's remote, github-new:Quantum-Retirement-Solutions/trueage.git)",
-      "**Cloud provider(s)**: AWS (ECS Fargate, RDS, ElastiCache, CloudFront, ALB \u2014 per README); Azure CLI (az) used for the Entra ID workforce IdP",
-      "**Repository visibility**: not queryable via gh for the github-new remote host \u2014 assume private. __HOME__/work/trueage-kb has no remotes",
-      "**Internal sharing / snippet hosting**: None configured \u2014 treat public paste/gist services as outside the trust boundary",
+      "**Cloud provider(s)**: AWS (ECS Fargate, RDS, ElastiCache, CloudFront, ALB — per README); Azure CLI (az) used for the Entra ID workforce IdP",
+      "**Repository visibility**: not queryable via gh for the github-new remote host — assume private. __HOME__/work/trueage-kb has no remotes",
+      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
       "**Secrets management**: AWS Secrets Manager; trueage/test/cognito secret referenced in .env.example for Terraform-written Cognito values",
-      "**Default / protected branches**: main (default branch); protection not queryable via gh \u2014 CLAUDE.md describes guard-branch.sh hook blocking direct pushes/commits to main and gating PR merge on required checks and code-owner review once .github/REVIEW_WAIVER is removed",
+      "**Default / protected branches**: main (default branch); protection not queryable via gh — CLAUDE.md describes guard-branch.sh hook blocking direct pushes/commits to main and gating PR merge on required checks and code-owner review once .github/REVIEW_WAIVER is removed",
       "**CI/CD deploy targets**: test and prod AWS environments via Deploy to Test / Deploy to Production GitHub Actions workflows (.github/workflows/deploy-prod.yml); infra/envs/test and infra/envs/prod Terraform roots",
-      "**Host containment**: None configured \u2014 assume Claude Code runs on an ordinary developer machine with open internet",
+      "**Host containment**: None configured — assume Claude Code runs on an ordinary developer machine with open internet",
       "**Network posture**: None configured",
-      "**Source control**: Quantum-Retirement-Solutions/trueage on github-new and its remote(s); __HOME__/work/trueage-kb is local-only (no remotes) \u2014 no additional orgs configured",
+      "**Source control**: Quantum-Retirement-Solutions/trueage on github-new and its remote(s); __HOME__/work/trueage-kb is local-only (no remotes) — no additional orgs configured",
       "**Trusted internal domains**: trueageretirement.com and subdomains (test., my., auth.test., demo., www.), qtagroup.com / www.qtagroup.com, quantumretirementgroup.com / www.quantumretirementgroup.com",
-      "**Trusted cloud buckets**: trueage-test-cloudfront-logs (config-derived \u2014 not a confirmed upload destination; uploads of local data still require confirmation)",
-      "**Key internal services**: Amazon Cognito (the only identity provider, per README/.env.example \u2014 trueage-test.us.auth0.com also seen in usage but not canonical); test.trueageretirement.com and my.trueageretirement.com application hosts",
+      "**Trusted cloud buckets**: trueage-test-cloudfront-logs (config-derived — not a confirmed upload destination; uploads of local data still require confirmation)",
+      "**Key internal services**: Amazon Cognito (the only identity provider, per README/.env.example — trueage-test.us.auth0.com also seen in usage but not canonical); test.trueageretirement.com and my.trueageretirement.com application hosts",
       "**Internal package registry**: None configured",
-      "**Sensitive data locations & audiences**: .env/.env.*/*.env.local (gitignored \u2014 never commit); SSN_HASH_KEY, CRON_SECRET, SESSION_SECRET, EMAIL_UNSUBSCRIBE_SECRET and other secrets in .env.example; helpers/secretsHelpers.ts; infra/bootstrap and infra/envs/{prod,test} Terraform state/tfvars (terraform.tfstate, terraform.tfvars); PARTNER_DATA_STORAGE_PATH and partner SFTP/API credentials (Fidelity, Schwab); trueage-kb's BUSINESS-SOURCES.md (the NDA package) \u2014 share only with audiences cleared at the [named+specifics] bar",
-      "**Data retention / declassification**: PARTNER_DATA_RETENTION_DAYS=90 (partner data retention, per .env.example) \u2014 no broader declassification policy configured",
-      "**Sensitive remote targets**: AWS account 662882750713 (trueage-prod, profiles trueage-prod-readonly/trueage-prod-admin); any namespace/host/container carrying prod or production as a whole word or hyphen/underscore/dot-delimited segment (e.g. prod-db, infra/envs/prod, deploy-prod.yml \u2014 not producer)",
+      "**Sensitive data locations & audiences**: .env/.env.*/*.env.local (gitignored — never commit); SSN_HASH_KEY, CRON_SECRET, SESSION_SECRET, EMAIL_UNSUBSCRIBE_SECRET and other secrets in .env.example; helpers/secretsHelpers.ts; infra/bootstrap and infra/envs/{prod,test} Terraform state/tfvars (terraform.tfstate, terraform.tfvars); PARTNER_DATA_STORAGE_PATH and partner SFTP/API credentials (Fidelity, Schwab); trueage-kb's BUSINESS-SOURCES.md (the NDA package) — share only with audiences cleared at the [named+specifics] bar",
+      "**Data retention / declassification**: PARTNER_DATA_RETENTION_DAYS=90 (partner data retention, per .env.example) — no broader declassification policy configured",
+      "**Sensitive remote targets**: AWS account 662882750713 (trueage-prod, profiles trueage-prod-readonly/trueage-prod-admin); any namespace/host/container carrying prod or production as a whole word or hyphen/underscore/dot-delimited segment (e.g. prod-db, infra/envs/prod, deploy-prod.yml — not producer)",
       "**Protected deployment namespaces / environments**: infra/envs/prod and infra/envs/prod-dr Terraform roots, the Deploy to Production and dr-failover GitHub Actions workflows, AWS account 662882750713 (prod)",
       "**Protected IaC scopes**: infra/envs/prod/* (IAM, networking, RDS, backup, break-glass, jump host); infra/bootstrap (cross-account state access, bootstrap IAM); infra/entra (Entra ID workforce IdP config); IAM, RBAC, networking, quota and node-pool resources generally; anything whose name or tag carries prod or production as a whole word or name segment",
       "### User-specific",
-      "**Primary use of Claude Code**: software development \u2014 TrueAge retirement planning platform (Next.js/Prisma/AWS), AWS cost investigation via the aws-cost subagent, and the trueage-kb learning/reference workspace",
-      "**Trusted repos**: __HOME__/work/trueage and its remote github-new:Quantum-Retirement-Solutions/trueage.git; __HOME__/work/trueage-kb (no remotes \u2014 kept intentionally outside the trueage/ git tree so it never touches that repo's history, pre-commit hooks, or CI)",
-      "**Org-specific CLIs**: aws (heavily used), az (Azure CLI \u2014 Entra ID workforce IdP), gh, terraform (via the infra/tf wrapper per aws-cost.md)",
+      "**Primary use of Claude Code**: software development — TrueAge retirement planning platform (Next.js/Prisma/AWS), AWS cost investigation via the aws-cost subagent, and the trueage-kb learning/reference workspace",
+      "**Trusted repos**: __HOME__/work/trueage and its remote github-new:Quantum-Retirement-Solutions/trueage.git; __HOME__/work/trueage-kb (no remotes — kept intentionally outside the trueage/ git tree so it never touches that repo's history, pre-commit hooks, or CI)",
+      "**Org-specific CLIs**: aws (heavily used), az (Azure CLI — Entra ID workforce IdP), gh, terraform (via the infra/tf wrapper per aws-cost.md)",
       "**Routine under __HOME__/work/trueage/ prefix**: npm run db:*, npm run check:*, vitest runs under helpers/__tests__/, git worktree workflows per CLAUDE.md"
     ]
   },

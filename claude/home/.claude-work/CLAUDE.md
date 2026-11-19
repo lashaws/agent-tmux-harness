@@ -23,23 +23,29 @@ otherwise finish on your own" in dozens of prompts. Assume it on every task.
   `**Your turn** — <what it unblocks>`, then per step: one line saying what it does and the
   output to expect, then the command alone in its fenced block. A Stop hook records each block
   under that heading (`~/.claude-work/bin/your-turn`); the status line counts open items,
-  `/your-turn` reprints them, the notification names the first. Untagged commands are lost
+  every reply ends by repeating them, the notification names the first. Untagged commands are lost
   in the scrollback once background agents report.
 - Each hand-over carries `Why yours: <what refused you>` (a named hook, the classifier, a sign-in,
   MFA, a desktop app, a decision reserved to Lashaw). Try the step yourself first; the Stop hook
   blocks a hand-over without the line.
-- Right after a hand-over, start `~/.claude-work/bin/your-turn wait <ids>` with
-  `run_in_background`. `~/.zsh/your-turn-watch.zsh` sees Lashaw run the command in tmux, saves its
+- Before writing a hand-over, start `~/.claude-work/bin/your-turn wait --session` with
+  `run_in_background` (it picks up the items the hand-over records; the Stop hook blocks a
+  hand-over without it). `~/.zsh/your-turn-watch.zsh` sees Lashaw run the command in tmux, saves its
   output and marks it done, so you wake with the exit code and output. Never ask "did it run?" or
   for pasted output. A handed-over command never prints a secret: pipe it to a file or variable,
   or print only a length or fingerprint (the watcher also skips and redacts, as a backstop).
+- While any hand-over is still open, end every reply with `**Still waiting on you**`: each open
+  command again (one line on what it does and the output to expect, then the command alone in its
+  block), so `/copy` always has it; never point back to an earlier reply. Stop-hook enforced.
 - `/sleep` is Lashaw's alone (a time, or none for "when every session is done"); follow the away
   rules and the T-20 wrap-up warning its hook injects, and never start it yourself.
-- SessionStart lists open threads (one line each). Open one only when Lashaw's prompt continues
+- SessionStart recaps recent sessions in the repo, to Lashaw and to you (one line each,
+  unfinished first, then the last finished ones). Open one only when Lashaw's prompt continues
   it; otherwise ignore the list. End a reply that leaves work open with a `Next:` line, which
   becomes that thread's next step.
-- The status line shows the session's state (`⏳ running`, `⚙ working`, `👤 waiting on you`,
-  `✓ done`, `💤` while /sleep is set), so
+- The status line shows the session's state (`👤 waiting on you` leads whenever Lashaw has
+  something to do, with running work after it; else `⏳ running`, `⚙ working`, `✓ done`; `💤`
+  while /sleep is set; a `your-turn wait` watcher is not counted as running), so
   Lashaw never asks "can I close?". A check due after this session (next run, tomorrow, next
   week) never lives in a session-bound loop or monitor, which dies on close: put it in an issue
   checkbox or a scheduled job outside the session, say where, and end the in-session watcher.

@@ -1,0 +1,60 @@
+#!/bin/bash
+# agent-browser: a dedicated, visible Google Chrome that Claude drives through the
+# chrome-devtools MCP server while Lashaw does sign-ins, MFA and secrets by hand.
+#
+# This is the launch recipe from Google's chrome-devtools-mcp docs: the real Chrome app,
+# its own profile (never the default one), remote debugging on 127.0.0.1 only. Nothing is
+# launched by an automation framework, so there are no automation flags to remove.
+# Sign-ins persist in the profile, so each site needs Lashaw's sign-in only once.
+#
+#   agent-browser start [url]        launch (or reuse) the window; open url in it
+#   agent-browser status             running or not, and the open tabs
+#   agent-browser wait <regex> [s]   block until a tab's URL matches (default 900 s);
+#                                    run in the background during a hand-over
+#   agent-browser stop               quit this Chrome only (not Lashaw's own Chrome)
+set -euo pipefail
+
+PORT="${AGENT_BROWSER_PORT:-9222}"
+PROFILE="$HOME/Library/Application Support/agent-browser/profile"
+CHROME_APP="/Applications/Google Chrome.app"
+BASE="http://127.0.0.1:$PORT"
+
+main_pid() { pgrep -f -- "--user-data-dir=$PROFILE" | while read -r p; do
+  ps -o command= -p "$p" | grep -q -- '--type=' || { echo "$p"; break; }; done; }
+up() { [ -n "$(main_pid)" ] && curl -fsS --max-time 2 "$BASE/json/version" >/dev/null 2>&1; }
+tabs() { curl -fsS --max-time 3 "$BASE/json/list" | python3 -c '
+import json,sys
+for t in json.load(sys.stdin):
+    if t.get("type")=="page": print(" ", t.get("url","")[:120], "|", t.get("title","")[:60])'; }
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  start)
+    url="${1:-}"
+    if ! up && curl -fsS --max-time 2 "$BASE/json/version" >/dev/null 2>&1; then
+      echo "port $PORT is taken by another browser; set AGENT_BROWSER_PORT" >&2; exit 2
+    fi
+    mkdir -p "$PROFILE"; chmod 700 "$(dirname "$PROFILE")"
+    # With the same --user-data-dir, a second launch hands the URL to the running window.
+    open -na "$CHROME_APP" --args --user-data-dir="$PROFILE" --remote-debugging-port="$PORT" \
+      --no-first-run --no-default-browser-check ${url:+"$url"}
+    for _ in $(seq 40); do up && break; sleep 0.5; done
+    up || { echo "Chrome did not open its debug port within 20 s" >&2; exit 1; }
+    echo "ready: $(curl -fsS "$BASE/json/version" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Browser"])') on $BASE"
+    tabs ;;
+  status)
+    if up; then echo "running on $BASE (pid $(main_pid))"; tabs; else echo "not running"; fi ;;
+  wait)
+    pat="${1:?usage: agent-browser wait <url-regex> [seconds]}"; limit="${2:-900}"
+    end=$((SECONDS + limit))
+    while [ $SECONDS -lt $end ]; do
+      if up && tabs | grep -Eq -- "$pat"; then echo "matched: $pat"; tabs; exit 0; fi
+      sleep 2
+    done
+    echo "timed out after ${limit}s waiting for a tab matching: $pat"; up && tabs; exit 1 ;;
+  stop)
+    pid="$(main_pid)"; [ -z "$pid" ] && { echo "not running"; exit 0; }
+    kill -TERM "$pid"; for _ in $(seq 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+    echo "stopped" ;;
+  *) sed -n '2,14p' "$0"; exit 2 ;;
+esac

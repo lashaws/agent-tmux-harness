@@ -2,7 +2,7 @@
 # harness.sh — keep the Claude Code harness (personal ~/.claude and work ~/.claude-work)
 # in this repo, and put it back on any Mac.
 #
-#   bash harness.sh capture   live files in manifest.txt -> home/  (run after changing the harness)
+#   bash harness.sh capture   run tests/, then live files in manifest.txt -> home/  (run after changing the harness)
 #   bash harness.sh diff      what differs between this machine and the repo; exit 1 if anything
 #   bash harness.sh install   home/ -> this machine; backs up every file it replaces
 #
@@ -47,6 +47,8 @@ capture_to() {
 }
 
 cmd_capture() {
+  python3 -I "$HERE/tests/test_harness.py" >/dev/null \
+    || { python3 -I "$HERE/tests/test_harness.py" | grep -v '^PASS' >&2; echo "Harness tests failed; nothing captured." >&2; exit 1; }
   local tmp; tmp="$(mktemp -d)"
   capture_to "$tmp"
   rm -rf "$REPO_HOME"; mv "$tmp" "$REPO_HOME"

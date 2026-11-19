@@ -9,6 +9,7 @@
 .claude/settings.json
 .claude/statusline.sh
 .claude/statusline-personal.sh
+.claude/statusline-badge.sh
 .claude/hooks
 .claude/bin
 .claude/agents

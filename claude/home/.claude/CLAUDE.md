@@ -24,18 +24,25 @@ curator gates, egress rules and clinical-scope rules.
   - When pointing Lashaw at a file to open (an artifact, an output, a report), link its folder
     right after it too, e.g. `([folder](file://__HOME__/path/to/))`: a file:// link to a
     directory opens in Finder. An artifact also gets its claude.ai link.
-- **Hand-overs run themselves.** A command handed to Lashaw goes under `**Your turn** — <what
-  it unblocks>` with a `Why yours:` line; then start `~/.claude/bin/your-turn wait <ids>` in the
-  background. Their shell reports the run and its output, so never ask whether it ran (the Why yours
+- **Hand-overs run themselves.** Before writing a hand-over, start `~/.claude/bin/your-turn wait
+  --session` in the background; then put the command under `**Your turn** — <what it unblocks>`
+  with a `Why yours:` line. Their shell reports the run and its output, so never ask whether it ran (the Why yours
   line is Stop-hook enforced). A handed-over command never prints a secret; the watcher's skip
   list and redaction are only a backstop.
-- **Done is visible.** The status line shows `⏳ running`, `⚙ working`, `👤 waiting on you` or `✓ done`, and `💤` while /sleep is scheduled. A check
+- **Open commands ride at the bottom.** While any hand-over is still open, end every reply with
+  `**Still waiting on you**`: each open command again (one line on what it does and the output to
+  expect, then the command alone in its block), so `/copy` always has it; never point back to an
+  earlier reply. Stop-hook enforced.
+- **Done is visible.** The status line shows `👤 waiting on you` (leads whenever Lashaw has
+  something to do, with any running work after it), `⏳ running`, `⚙ working` or `✓ done`, and
+  `💤` while /sleep is scheduled. A `your-turn wait` watcher is not counted as running. A check
   due after this session (next run, tomorrow, next week) never stays in a session-bound loop or
   monitor, which dies on close: move it to an issue checkbox or a scheduled job, say where, and
   end the in-session watcher.
 - **Sleep mode** is Lashaw's `/sleep` (a time, or none for "when every session is done"). A hook then injects
   the away rules and the T-20 wrap-up warning into every live session; follow them. Never start it yourself.
-- **Open threads** are listed at session start, one line each. Open one only when Lashaw's prompt
+- **Recent sessions** in the project are recapped at session start, to Lashaw and to you, one line
+  each (unfinished first, then the last finished ones). Open one only when Lashaw's prompt
   continues it; otherwise ignore the list. End a reply that leaves work open with a `Next:` line.
 - **Stop only for** a decision the project reserves for Lashaw (in life-wiki: egress, scope,
   spend tier, git-history rewrite, `curator-gate` items), something destructive or

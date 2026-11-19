@@ -7,7 +7,9 @@ This script records those blocks so they survive the scrollback.
 
   your-turn record            Stop hook: read new transcript lines, save tagged
                               blocks, clear items Lashaw ran with `!` in the prompt;
-                              block once if a hand-over lacks `Why yours:`
+                              block once if a hand-over lacks `Why yours:`, if new items
+                              have no `wait --session` watcher, or if the reply leaves out an
+                              open command (it must end with a **Still waiting on you** reprint)
   your-turn prompt            UserPromptSubmit hook: remind the agent of open items
   your-turn match <command>   ids of open items (in any config) whose command equals it
                               (the zsh watcher, ~/.zsh/your-turn-watch.zsh, calls this)
@@ -19,6 +21,12 @@ This script records those blocks so they survive the scrollback.
   your-turn wait <id>... [--timeout S]
                               block until each item is ran/done; print exit code and the
                               last 60 output lines. Exit 0 all ok, 1 otherwise, 2 timeout
+  your-turn wait --session [id] [--timeout S]
+                              the same for every item of a session (found from the parent
+                              claude process when no id is given), including items recorded
+                              after it starts: start it in the background BEFORE writing a
+                              hand-over and the Stop hook does not block. Gives up after 30 min
+                              with no item recorded
   your-turn count [session]   number of open items (status line)
   your-turn first [session]   first open command, one line (notification)
   your-turn list  [session]   open items as markdown (the /your-turn skill)
@@ -35,6 +43,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -51,6 +60,7 @@ OUT_CAP = 2000
 WAIT_TAIL = 60
 MT = ZoneInfo("America/Denver")
 PRUNE_DAYS = 14
+SESSION_GRACE = 30 * 60  # wait --session gives up if no hand-over is recorded by then
 
 MARKER = re.compile(r"^\s*(?:#{1,6}\s+|\*\*|__)\s*Your turn\b(.*)$", re.IGNORECASE)
 HEADING = re.compile(r"^\s*#{1,6}\s")
@@ -154,7 +164,7 @@ def extract(text: str) -> list[dict]:
                 i += 1
             cmd = "\n".join(body).strip()
             if cmd:
-                text_note = " ".join(LIST_MARK.sub("", n).strip() for n in note if n.strip())
+                text_note = " ".join(LIST_MARK.sub("", n).strip() for n in note if n.strip() and not WHY_YOURS.match(n))
                 found.append({"cmd": cmd, "note": text_note[:240], "unblocks": unblocks[:160]})
             note = []
         else:
@@ -262,7 +272,8 @@ def cmd_record(data: dict) -> None:
         save(session, items)
     seen_path.write_text("\n".join(sorted(seen)))
     prune()
-    reason = gate_reason(data, last if isinstance(last, str) else "", [i for i in items if i["id"] in new_ids])
+    reason = gate_reason(data, last if isinstance(last, str) else "", [i for i in items if i["id"] in new_ids],
+                         [i for i in items if i["status"] == "open"])
     if reason:
         print(json.dumps({"decision": "block", "reason": reason}))
 
@@ -271,13 +282,49 @@ def is_subagent(data: dict) -> bool:
     return bool(data.get("agent_id") or data.get("agent_type") or ("subagent" + "s/") in str(data.get("transcript_path", "")))
 
 
-def gate_reason(data: dict, reply: str, new_items: list[dict]) -> str:
+REPRINT_HEADING = "**Still waiting on you**"
+
+
+def fenced_bodies(text: str) -> list[str]:
+    """Normalised body of every fenced block in a reply."""
+    out, lines, i = [], text.splitlines(), 0
+    while i < len(lines):
+        f = FENCE.match(lines[i])
+        if f:
+            body = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith(f.group(1)):
+                body.append(lines[i])
+                i += 1
+            out.append(norm("\n".join(body)))
+        i += 1
+    return out
+
+
+def shown(item: dict, bodies: list[str]) -> bool:
+    cmd = norm(item["cmd"])
+    return any(cmd == b or cmd in b for b in bodies)
+
+
+def reprint_brief(items: list[dict]) -> str:
+    rows = []
+    for i in items:
+        rows.append(f'  [{i["id"]}] {i.get("note") or i.get("unblocks") or ""}'.rstrip())
+        rows.extend("      " + c for c in i["cmd"].splitlines())
+    return "\n".join(rows)
+
+
+def gate_reason(data: dict, reply: str, new_items: list[dict], open_now: list[dict] | None = None) -> str:
     """One block reason covering every gate that failed, or "" to let the turn stop.
 
+    Gates: a hand-over needs `Why yours:`; new items need a running `wait --session` watcher (started
+    before the hand-over, it costs no block); while items are open the reply must show every open
+    command, so the last message always carries them for /copy.
     Blocks at most once in a row: `stop_hook_active` is true on the Stop that follows a block.
     """
     if data.get("stop_hook_active") or is_subagent(data) or not reply.strip():
         return ""
+    open_now = open_now or []
     problems = []
     handovers = sum(1 for line in reply.splitlines() if MARKER.match(line))
     if handovers and len(WHY_YOURS.findall(reply)) < handovers:
@@ -287,12 +334,28 @@ def gate_reason(data: dict, reply: str, new_items: list[dict]) -> str:
             "heading naming what stops you: a named hook refusal, the permission classifier, a sign-in, MFA or QR, "
             "a desktop or console app, or a decision reserved to Lashaw."
         )
-    if new_items:
+    reprint = (
+        f"end with a {REPRINT_HEADING} section, numbered: per item one line saying what it does and the output "
+        "to expect, then the command alone in its own fenced bash block, so it is the last thing Lashaw sees and "
+        "`/copy` picks it up. Keep it short; no other text after it."
+    )
+    if new_items and not waiter_alive(data.get("session_id")):
         ids = " ".join(i["id"] for i in new_items)
         problems.append(
-            f"Items recorded for Lashaw: {ids}. Start `{tool()} wait {ids}` now with Bash run_in_background, so you "
-            "are woken when Lashaw runs the command, then end the turn. Do not ask Lashaw to confirm or paste output."
+            f"Items recorded for Lashaw: {ids}, but no watcher is running. Start `{tool()} wait --session` now with "
+            "Bash run_in_background, so you are woken when Lashaw runs them (next time start it before writing the "
+            f"hand-over, and no block is needed); then {reprint} Do not ask Lashaw to confirm or paste output. "
+            "Open items:\n" + reprint_brief(open_now)
         )
+    else:
+        bodies = fenced_bodies(reply)
+        missing = [i for i in open_now if not shown(i, bodies)]
+        if missing:
+            problems.append(
+                "Commands are still waiting on Lashaw but this reply does not show them, so Lashaw would have to dig "
+                "through the scrollback. Check read-only whether each already happened and clear finished ones with "
+                f"`{tool()} done <id>`; for the rest, {reprint} Still open:\n" + reprint_brief(open_now)
+            )
     return "Stop blocked once; fix these and finish:\n- " + "\n- ".join(problems) if problems else ""
 
 
@@ -316,14 +379,8 @@ def cmd_prompt(data: dict) -> None:
     items = open_items(session if valid_session(session) else None)
     if not items:
         return
-    lines = [
-        "Commands handed to Lashaw in this session that are still open (the your-turn list).",
-        "A zsh watcher marks an item ran, with exit code and output, when Lashaw runs it. Never ask Lashaw to confirm",
-        "or paste output: run `" + tool() + " wait <ids>` with Bash run_in_background after a hand-over, and read what it prints.",
-        "If Lashaw types \"done\" or \"ran\", or you can see the result read-only, clear the item with",
-        "`" + tool() + " done <id>`; re-hand an unfinished one under a Your turn heading only if it is still needed.",
-        "Each hand-over needs a `Why yours:` line.",
-    ]
+    lines = [f"Open your-turn items (end the reply with them under {REPRINT_HEADING}; clear finished ones with "
+             f"`{tool()} done <id>`):"]
     for i in items[:10]:
         first = i["cmd"].splitlines()[0]
         lines.append(f'- [{i["id"]}] {first[:160]}' + (f' — {i["note"][:120]}' if i.get("note") else ""))
@@ -520,21 +577,93 @@ def cmd_ran(rest: list[str]) -> int:
     return 0
 
 
+def own_session() -> str | None:
+    """Session of the claude process this command runs under: walk up the parent pids to the one
+    with <config>/sessions/<pid>.json (Claude Code writes it; the Bash tool runs as its child)."""
+    pid = os.getppid()
+    for _ in range(20):
+        if pid <= 1:
+            return None
+        for cfg in [CONFIG] + [c for c in WATCH_CONFIGS if c != CONFIG]:
+            try:
+                sid = json.loads((cfg / "sessions" / f"{pid}.json").read_text()).get("sessionId")
+                if valid_session(sid):
+                    return sid
+            except (OSError, ValueError):
+                pass
+        r = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+        try:
+            pid = int(r.stdout.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def waiter_path(session: str) -> Path:
+    return PENDING / f"{session}.waiter"
+
+
+def waiter_alive(session: str | None) -> bool:
+    if not valid_session(session):
+        return False
+    try:
+        os.kill(int(waiter_path(session).read_text().strip()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def wait_session(session: str, timeout: float) -> int:
+    """Watch the whole session: every item open now or recorded later, until all are ran/done.
+    Gives up if no item is recorded within SESSION_GRACE (the hand-over never came)."""
+    PENDING.mkdir(parents=True, exist_ok=True)
+    marker = waiter_path(session)
+    marker.write_text(str(os.getpid()))
+    start, seen = time.time(), []
+    try:
+        while True:
+            items = load(session)
+            seen += [i["id"] for i in items if i.get("status") == "open" and i["id"] not in seen]
+            if seen and all(i.get("status") != "open" for i in items if i["id"] in seen):
+                break
+            if not seen and time.time() - start > SESSION_GRACE:
+                print(f"no hand-over was recorded within {int(SESSION_GRACE // 60)} min; watcher stopped")
+                return 2
+            if time.time() - start > timeout:
+                print(f"timed out waiting for: {' '.join(seen)}")
+                return 2
+            time.sleep(1)
+    finally:
+        if marker.exists() and marker.read_text().strip() == str(os.getpid()):
+            marker.unlink(missing_ok=True)
+    return report(seen, {i["id"]: i for i in load(session) if i["id"] in seen})
+
+
 def cmd_wait(rest: list[str]) -> int:
     timeout = 6 * 3600.0
     ids = []
+    session = None
     k = 0
     while k < len(rest):
         if rest[k] == "--timeout" and k + 1 < len(rest):
             timeout = float(rest[k + 1])
             k += 2
+        elif rest[k] == "--session":
+            nxt = rest[k + 1] if k + 1 < len(rest) and not rest[k + 1].startswith("-") else None
+            session = nxt or own_session() or ""
+            k += 2 if nxt else 1
         else:
             ids.append(rest[k])
             k += 1
-    if not ids:
-        print("usage: your-turn wait <id>... [--timeout S]", file=sys.stderr)
-        return 2
     prune_out()
+    if session is not None:
+        if not valid_session(session):
+            print("your-turn wait --session: could not find this session (pass its id)", file=sys.stderr)
+            return 2
+        return wait_session(session, timeout)
+    if not ids:
+        print("usage: your-turn wait <id>... | --session [id] [--timeout S]", file=sys.stderr)
+        return 2
     deadline = time.time() + timeout
     results: dict[str, dict] = {}
     while True:
@@ -552,9 +681,13 @@ def cmd_wait(rest: list[str]) -> int:
             print(f"timed out waiting for: {' '.join(i for i in ids if i not in results)}")
             return 2
         time.sleep(1)
+    return report(ids, results)
+
+
+def report(ids: list[str], results: dict[str, dict]) -> int:
     ok = True
     for iid in ids:
-        r = results[iid]
+        r = results.get(iid, {"missing": True})
         if r.get("missing"):
             print(f"[{iid}] unknown item")
             ok = False
