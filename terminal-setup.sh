@@ -1,7 +1,6 @@
 #!/bin/bash
 # terminal-setup.sh — replicate LaShaw's tmux + statusline setup on a new Mac.
-# Installs tmux (+ iTerm2 app), installs ~/.tmux.conf, the Claude Code
-# statusline script(s), and the cheatsheet, and adds the tmux auto-attach
+# Installs tmux (+ iTerm2 app), installs ~/.tmux.conf and the cheatsheet, and adds the tmux auto-attach
 # block to ~/.zshrc. iTerm appearance/keys are NOT managed here — configure
 # that profile once in the UI (see README).
 # Usage: clone the whole dotfiles repo (this script reads sibling files), then:
@@ -105,22 +104,8 @@ Config lives at `~/.tmux.conf`. This file: `~/tmux-cheatsheet.md` (delete anytim
 CHEAT
 echo "==> ~/tmux-cheatsheet.md written"
 
-# 4. Claude Code status line (personal account; work account too if ~/.claude-work exists)
-install_statusline() {
-  local src="$1" dest_dir="$2" dest="$dest_dir/statusline.sh"
-  [ -d "$dest_dir" ] || return 0
-  if [ -f "$dest" ] && ! cmp -s "$src" "$dest"; then
-    cp "$dest" "$dest.bak-$(date +%Y%m%d%H%M%S)"
-    echo "==> Existing $dest backed up"
-  fi
-  cp "$src" "$dest"
-  chmod +x "$dest"
-  echo "==> $dest installed"
-}
-install_statusline "$SCRIPT_DIR/statusline.sh" "$HOME/.claude"
-install_statusline "$SCRIPT_DIR/statusline-work.sh" "$HOME/.claude-work"
-echo "    NOTE: statusline only shows up if that account's settings.json has:"
-echo '      "statusLine": {"type": "command", "command": "$HOME/.claude/statusline.sh"}'
+# 4. Claude Code harness (both accounts, status lines included): claude/harness.sh install,
+#    run by update.sh. Not done here so this script stays terminal-only.
 
 # 5. Auto-attach block in .zshrc (idempotent — skips if already present)
 if ! grep -q 'tmux new-session -A -s home' "$HOME/.zshrc" 2>/dev/null; then

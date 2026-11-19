@@ -1,0 +1,9 @@
+{
+  "name": "Lashaw (dark, slate prompts)",
+  "base": "dark",
+  "overrides": {
+    "userMessageBackground": "rgb(32, 44, 70)",
+    "userMessageBackgroundHover": "rgb(42, 56, 86)",
+    "text": "rgb(235, 235, 235)"
+  }
+}

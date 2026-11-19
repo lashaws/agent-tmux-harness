@@ -1,0 +1,190 @@
+{
+  "env": {
+    "CLAUDE_CODE_TMUX_TRUECOLOR": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+  "permissions": {
+    "allow": [],
+    "defaultMode": "auto"
+  },
+  "skillOverrides": {
+    "google-agents-cli-adk-code": "off",
+    "google-agents-cli-deploy": "off",
+    "google-agents-cli-eval": "off",
+    "google-agents-cli-observability": "off",
+    "google-agents-cli-publish": "off",
+    "google-agents-cli-scaffold": "off",
+    "google-agents-cli-workflow": "off",
+    "grill-me": "on"
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/notify-input-needed.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/session-state stop",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/context-size-nudge.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/your-turn prompt",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/session-state prompt",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/sleep-schedule-hook.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "Explore|general-purpose|Plan|claude",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/subagent-report-cap.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/subagent-background-tasks.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/session-state threads",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/sleep-schedule-hook.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "$HOME/.claude/statusline-personal.sh"
+  },
+  "enabledPlugins": {
+    "swift-lsp@claude-plugins-official": false,
+    "postman@claude-plugins-official": true,
+    "frontend-design@anthropic-plugin-directory": true,
+    "cc-plugin-you-should-know@builtin": true,
+    "caveman@anthropic-plugin-directory": true
+  },
+  "outputStyle": "Proactive",
+  "sandbox": {
+    "enabled": false
+  },
+  "effortLevel": "high",
+  "modelSettings": {
+    "claude-opus-5": {
+      "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "skipWorkflowUsageWarning": true,
+  "theme": "custom:lashaw",
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash(bd:*) in __HOME__/life-wiki \u2014 routine issue-tracker use (61\u00d7 in recent transcripts)"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "git push / git remote add / git remote set-url in __HOME__/life-wiki \u2014 repo hard rule is local-git-only, no remote ever configured or pushed to",
+      "git add -A / git add . / git add --all / git commit -a / git commit -am in __HOME__/life-wiki \u2014 shared working tree; CLAUDE.md requires explicit-path staging only",
+      "writes to audio files (*.m4a, *.mp3, *.wav, *.mp4, *.aac) or direct edits inside ingest/ or any raw/ folder in __HOME__/life-wiki \u2014 repo hard rules forbid committing audio and hand-editing pre-sanitized/raw sources",
+      "In __HOME__/dev/quarry (public repo github.com/lashaws/quarry): git commit or push when the author/committer email is not lashawsalta@gmail.com, or when the diff contains trueage, americantrust, lsalta or real schema/connection details \u2014 public history must never carry the work identity or private schema",
+      "Adding a headless mode, a fast/no-delay flag, or removing human_pause/human_scroll pacing in the Facebook miner (__HOME__/dev/grapevine/research/facebook/) \u2014 standing rule: always human-paced, headed browser, modest call budgets, to avoid flagging the real account",
+      "Copying, uploading, pasting, or committing anything from __HOME__/dev-archive/sensitive-review/ \u2014 unrotated credentials and regulated data awaiting rotation then deletion; reading key names to help rotate is fine"
+    ],
+    "environment": [
+      "### Org-wide",
+      "**Organization**: None configured",
+      "**Cloud provider(s)**: None configured",
+      "**Repository visibility**: __HOME__/life-wiki is private and local-only (no remotes). Projects under __HOME__/dev are personal repos; github.com/lashaws/quarry is PUBLIC \u2014 treat everything pushed there as world-readable. Others: assume private unless a visibility check shows public",
+      "**Internal sharing / snippet hosting**: None configured \u2014 treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: local files only \u2014 repo's own .gitignore excludes `.env`, `*.key`, `.claude/private/`, `.claude/reference/alert-smtp-credentials`, `.beads-credential-key`; never commit or expose these",
+      "**Default / protected branches**: Not queryable via gh (no remote; default branch unknown \u2014 origin/HEAD unset)",
+      "**CI/CD deploy targets**: None configured",
+      "**Network posture**: local-only / no-egress by repo policy \u2014 CLAUDE.md states this repo never leaves the machine except via a gated VPS mirror sync and model API calls; local git only, no git remote is ever added to this repo",
+      "**Source control**: personal GitHub account `lashaws` (remotes under github.com/lashaws/*) for projects in __HOME__/dev. __HOME__/life-wiki is the exception \u2014 CLAUDE.md hard rule: never add a git remote to it, local git only. Some __HOME__/dev repos (grapevine, nestmap) intentionally have no remote \u2014 do not add one",
+      "**Trusted internal domains**: None configured",
+      "**Trusted cloud buckets**: None configured",
+      "**Key internal services**: VPS mirror host referenced in repo docs (lashaws@srv1440810, OpenClaw/Bernard companion) \u2014 repo-authored documentation only, not usage-corroborated; treat as context, not a trusted operational target",
+      "**Internal package registry**: None configured",
+      "**Sensitive data locations & audiences**: This repo is a personal health/life record (pseudonymized full health history, PII, journal, finance, housing data) under `wikis/` \u2014 per CLAUDE.md, health data is cited and mirror-scoped only to `wikis/health/`, `wikis/shared/`, `wikis/journal/wiki/entries/` for the gated VPS companion (Bernard) serving the patient and family over WhatsApp; finance/housing/work, ingest/, raw transcripts, and audio are explicitly out of mirror scope and must never egress; audio files (.m4a/.mp3/.wav/.mp4/.aac) must never be committed",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment \u2014 plus, per this repo's own hard rules, the VPS mirror sync is the only sanctioned egress path and is leak-scan gated; any other push/network egress from this repo is out of policy",
+      "**Protected deployment namespaces / environments**: None configured \u2014 fall back to the Sensitive remote targets heuristic",
+      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: personal life-wiki curation (health, finance, housing, work, journal) plus personal software projects under __HOME__/dev (Quarry Postgres client, Facebook/Reddit research miners, house designer, Tab Slumber, caregiver screener, etc.) for a single human owner",
+      "**Trusted repo**: __HOME__/life-wiki (no remotes, local git only \u2014 never add a remote or push) and the personal project repos under __HOME__/dev (same directory as __HOME__/Dev \u2014 the filesystem is case-insensitive)",
+      "**Org-specific CLIs**: `bd` (Beads issue tracker, used routinely \u2014 61\u00d7 in recent transcripts)",
+      "**Routine under this repo's `.claude/scripts/` and `.claude/skills/` prefixes**: session-context, wiki-lint-structural, wiki-query, graph-insights, vps-mirror-sync, nightly-leak-scan, and other repo-defined maintenance scripts are routine, repo-scoped tooling",
+      "**Sensitive local data outside repos**: __HOME__/dev-archive/sensitive-review/ (unrotated credentials and regulated data pending rotation then deletion) \u2014 never copy or egress"
+    ]
+  },
+  "feedbackSurveyState": {
+    "lastShownTime": 1753967179724
+  },
+  "cleanupPeriodDays": 3650
+}

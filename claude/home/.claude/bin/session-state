@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""One-token state of a Claude Code session, for the status line and the done-notification.
+
+  session-state <transcript_path|session_id>
+      ⏳ 2 agents · 1 shell · 1 monitor   session-bound background work still running
+      👤 2 waiting on you                 open Your-turn items, or an unanswered AskUserQuestion
+      ⚙ working                           the session is mid-turn
+      ✓ done                              nothing running, nothing waiting
+  Priority: ⏳ running > ⚙ working > 👤 waiting > ✓ done (a pending AskUserQuestion is waiting, not working).
+  Working is read from <config>/sessions/<pid>.json (status "busy", pid alive and a claude process), which
+  survives an interrupt (no Stop fires then) and a dead process. With no live session file (a session whose
+  process died) the UserPromptSubmit marker counts only while the transcript changed in the last 30 minutes. A bare session id is looked up under <config>/projects/*/.
+  session-state open-tasks <transcript_path>
+                          ids of shell/monitor tasks still running in a subagent transcript, one per line
+                          (sidechain entries included, same structured parse, no cache); the SubagentStop
+                          hook ~/.claude/hooks/subagent-background-tasks.sh calls it. Exits 1 on an unreadable file.
+  session-state stop      Stop hook (stdin = hook JSON): forwards the input to `your-turn record`
+                          (its stdout, a possible block decision, passes through), clears the working
+                          marker, and notifies only on a real flip: the turn ends `✓ done` and the
+                          previous turn ended ⏳ or 👤 (a task-notification turn counts). An ordinary
+                          turn that ends done stays silent; notify-input-needed covers that.
+  session-state prompt    UserPromptSubmit hook: marks the session working.
+  session-state threads   SessionStart hook (startup only): injects up to 8 lines of open threads in this
+                          project (other sessions, newest first); `stop` writes each session's line to
+                          <config>/threads/<project>.json (goal, state, next step, handoff). A thread that is
+                          ✓ done with no open Your-turn items, or idle over 7 days, is not listed.
+
+Background work comes from the transcript, parsed from the structured entries only (a tool result
+that merely quotes "running in background" counts for nothing):
+  start  Bash toolUseResult.backgroundTaskId, "Command running in background with ID: X" /
+         "was moved to the background (ID: X", async Agent toolUseResult.agentId, Monitor "taskId"
+  end    <task-notification> with status completed|failed|killed|stopped, TaskStop's
+         "Successfully stopped task"; a SendMessage to an agent id starts that agent again
+Parsing is incremental: <config>/session-state/<session>.json keeps the byte offset and the open
+tasks, so a warm call reads only what was appended (a 100 MB transcript costs the same as a new one).
+The same state file records the last state, for the notification.
+
+<config> is the one containing the transcript's projects/ dir, else $CLAUDE_CONFIG_DIR or ~/.claude.
+SESSION_STATE_CONFIGS (colon list) and SESSION_STATE_PROC_MATCH override the config dirs and the
+process-name test for live sessions (tests). SESSION_STATE_DRY_RUN=1 makes `stop` print "NOTIFY <project>" instead of sending a notification.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from pathlib import Path
+
+HOME = Path.home()
+NOTE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
+TASK_ID = re.compile(r"<task-id>([\w-]+)</task-id>")
+STATUS = re.compile(r"<status>(\w+)</status>")
+BG_TEXT = re.compile(r"^Command (?:running in background with ID: |was moved to the background \(ID: )([\w-]+)")
+WORKING_STALE = 30 * 60
+THREAD_MAX_AGE = 7 * 86400
+THREAD_LINES = 8
+MT = ZoneInfo("America/Denver")
+GOAL = re.compile(r"<command-name>/goal</command-name>.*?<command-args>(.*?)</command-args>", re.S)
+NEXT = re.compile(r"^\W*(?:next(?: step)?s?|todo|remaining|still (?:to do|open)|waiting on|blocked on)\b[^:\n]*:\s*(.+)", re.I)
+ENDED = {"completed", "failed", "killed", "stopped"}
+
+
+def config_for(transcript: Path | None) -> Path:
+    if transcript and "projects" in transcript.parts:
+        return Path(*transcript.parts[: transcript.parts.index("projects")])
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(HOME / ".claude"))
+
+
+def find_transcript(arg: str) -> Path | None:
+    if "/" in arg or arg.endswith(".jsonl"):
+        p = Path(arg).expanduser()
+        return p if p.exists() else None
+    cfgs = [Path(os.environ["CLAUDE_CONFIG_DIR"])] if os.environ.get("CLAUDE_CONFIG_DIR") else []
+    for cfg in cfgs + [HOME / ".claude", HOME / ".claude-work"]:
+        hits = list((cfg / "projects").glob(f"*/{arg}.jsonl"))
+        if hits:
+            return hits[0]
+    return None
+
+
+def texts(content) -> list[str]:
+    """Text of a message: a plain string, or the text blocks of a list (never tool_result blocks)."""
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    return []
+
+
+def apply(entry: dict, st: dict, sidechain: bool = False) -> None:
+    tasks, questions = st["tasks"], st["questions"]
+    kind = entry.get("type")
+    if entry.get("isSidechain") and not sidechain:
+        return
+    if kind == "ai-title":
+        st["title"] = entry.get("aiTitle") or ""
+        return
+    if kind == "queue-operation":
+        if entry.get("operation") == "enqueue":
+            notified(entry.get("content") or "", tasks)
+        return
+    if kind == "attachment":
+        # A notification that lands mid-turn is stored as a queued_command attachment, not a
+        # user entry (seen 2026-11-19: bgcg79oiq ended but kept a subagent "running").
+        att = entry.get("attachment") or {}
+        if att.get("commandMode") == "task-notification" or (att.get("origin") or {}).get("kind") == "task-notification":
+            notified(str(att.get("prompt") or ""), tasks)
+        return
+    content = (entry.get("message") or {}).get("content")
+    if kind == "assistant":
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict) or b.get("type") != "tool_use":
+                continue
+            if b.get("name") == "AskUserQuestion":
+                questions.append(b.get("id"))
+            elif b.get("name") == "SendMessage":
+                to = (b.get("input") or {}).get("to")
+                if to in tasks and tasks[to]["kind"] == "agent":
+                    tasks[to]["running"] = True
+        return
+    if kind != "user":
+        return
+    for t in texts(content):
+        notified(t, tasks)
+        g = GOAL.search(t)
+        if g:
+            st["goal"] = " ".join(g.group(1).split())
+        elif not st["first"] and t.strip()[:1] not in ("", "<", "[") and len(t.strip()) >= 12:
+            st["first"] = " ".join(t.split())
+    tur = entry.get("toolUseResult")
+    tur = tur if isinstance(tur, dict) else {}
+    for b in content if isinstance(content, list) else []:
+        if isinstance(b, dict) and b.get("type") == "tool_result":
+            tid = b.get("tool_use_id")
+            if tid in questions:
+                questions.remove(tid)
+            body = b.get("content")
+            text = body if isinstance(body, str) else "\n".join(texts(body))
+            tm = BG_TEXT.match(text)
+            if tur.get("backgroundTaskId") or tm:
+                add(tasks, tur.get("backgroundTaskId") or tm.group(1), "shell")
+            elif tur.get("isAsync") and tur.get("agentId"):
+                add(tasks, tur["agentId"], "agent")
+            elif tur.get("taskId") and "persistent" in tur and text.startswith("Monitor started"):
+                add(tasks, tur["taskId"], "monitor")
+    if tur.get("task_id") and "Successfully stopped task" in str(tur.get("message", "")):
+        tasks.pop(tur["task_id"], None)
+
+
+def add(tasks: dict, tid: str, kind: str) -> None:
+    tasks[tid] = {"kind": kind, "running": True}
+
+
+def notified(text: str, tasks: dict) -> None:
+    text = text.lstrip()
+    if not text.startswith("<task-notification>"):
+        return
+    for block in NOTE.findall(text):
+        tid, status = TASK_ID.search(block), STATUS.search(block)
+        if tid and status and status.group(1) in ENDED:
+            if tid.group(1) in tasks and tasks[tid.group(1)]["kind"] == "agent":
+                tasks[tid.group(1)]["running"] = False  # may be resumed by SendMessage
+            else:
+                tasks.pop(tid.group(1), None)
+
+
+def load_state(sf: Path) -> dict:
+    try:
+        st = json.loads(sf.read_text())
+        if isinstance(st.get("tasks"), dict) and isinstance(st.get("questions"), list):
+            for k, v in (("goal", ""), ("first", ""), ("title", ""), ("last", ""), ("working", 0)):
+                st.setdefault(k, v)
+            return st
+    except (OSError, ValueError):
+        pass
+    return {"size": -1, "mtime": -1, "offset": 0, "tasks": {}, "questions": [], "last": "", "working": 0, "goal": "", "first": "", "title": ""}
+
+
+def save_state(sf: Path, st: dict) -> None:
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sf.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(st, separators=(",", ":")))
+    tmp.replace(sf)
+
+
+def refresh(transcript: Path, sf: Path) -> dict:
+    """Bring the cached parse up to date with the transcript; return the state."""
+    st = load_state(sf)
+    s = transcript.stat()
+    if (s.st_size, s.st_mtime_ns) == (st["size"], st["mtime"]):
+        return st
+    if s.st_size < st["offset"]:
+        st.update(offset=0, tasks={}, questions=[], goal="", first="")
+    with open(transcript, "rb") as fh:
+        fh.seek(st["offset"])
+        chunk = fh.read()
+    end = chunk.rfind(b"\n") + 1  # never consume a half-written last line
+    for raw in chunk[:end].split(b"\n"):
+        # cheap prefilter: only lines that can change the state are parsed
+        if not (b"task-notification" in raw or b"tool_result" in raw or b"AskUserQuestion" in raw or b"SendMessage" in raw
+                or b"/goal" in raw or b"ai-title" in raw or (not st["first"] and b'"user"' in raw)):
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        apply(entry, st)
+    st.update(offset=st["offset"] + end, size=s.st_size, mtime=s.st_mtime_ns)
+    save_state(sf, st)
+    return st
+
+
+def open_tasks(transcript: Path) -> list[str]:
+    """Ids of shell and monitor tasks still running in a subagent transcript (all entries are sidechain). Uncached."""
+    st = load_state(Path("/nonexistent"))
+    for raw in transcript.read_bytes().split(b"\n"):
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            apply(entry, st, sidechain=True)
+    return sorted(i for i, t in st["tasks"].items() if t["running"] and t["kind"] in ("shell", "monitor"))
+
+
+def live_sessions(cfgs: list[Path] | None = None) -> list[dict]:
+    """Sessions with a live claude process: <config>/sessions/<pid>.json whose pid is alive and runs claude."""
+    if cfgs is None:
+        env = os.environ.get("SESSION_STATE_CONFIGS")
+        cfgs = [Path(c) for c in env.split(":") if c] if env else [HOME / ".claude", HOME / ".claude-work"]
+    match = os.environ.get("SESSION_STATE_PROC_MATCH", "claude")
+    out = []
+    for cfg in cfgs:
+        for f in (cfg / "sessions").glob("*.json"):
+            try:
+                e = json.loads(f.read_text())
+                pid = int(e["pid"])
+                os.kill(pid, 0)
+                cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if match in cmd:
+                hits = list((cfg / "projects").glob(f"*/{e.get('sessionId')}.jsonl"))
+                out.append({"cfg": cfg, "session": e.get("sessionId"), "pid": pid, "cwd": e.get("cwd", ""),
+                            "status": e.get("status", ""), "transcript": hits[0] if hits else None})
+    return out
+
+
+def is_working(cfg: Path, session: str, st: dict, transcript: Path) -> bool:
+    live = [x for x in live_sessions([cfg]) if x["session"] == session]
+    if live:
+        return live[0]["status"] == "busy"
+    return bool(st.get("working")) and time.time() - transcript.stat().st_mtime < WORKING_STALE
+
+
+def open_items(cfg: Path, session: str) -> int:
+    p = cfg / "pending" / f"{session}.jsonl"
+    try:
+        return p.read_text().count('"status":"open"')
+    except OSError:
+        return 0
+
+
+def token(st: dict, waiting: int, working: bool = False) -> str:
+    counts = {"agent": 0, "shell": 0, "monitor": 0}
+    for t in st["tasks"].values():
+        if t["running"]:
+            counts[t["kind"]] += 1
+    names = {"agent": ("agent", "agents"), "shell": ("shell", "shells"), "monitor": ("monitor", "monitors")}
+    running = [f"{n} {names[k][n != 1]}" for k, n in counts.items() if n]
+    if running:
+        return "⏳ " + " · ".join(running)
+    if working and not st["questions"]:
+        return "⚙ working"
+    if waiting or st["questions"]:
+        return f"👤 {waiting + len(st['questions'])} waiting on you"
+    return "✓ done"
+
+
+def state_of(arg: str, idle: bool = False) -> tuple[str, Path | None, str]:
+    """`idle` leaves ⚙ out: the Stop hook asks what the session is once its turn has ended."""
+    transcript = find_transcript(arg)
+    if not transcript:
+        return "✓ done", None, arg
+    cfg = config_for(transcript)
+    session = transcript.stem
+    st = refresh(transcript, cfg / "session-state" / f"{session}.json")
+    working = not idle and is_working(cfg, session, st, transcript)
+    return token(st, open_items(cfg, session), working), cfg, session
+
+
+def update(cfg: Path, session: str, **fields) -> dict:
+    sf = cfg / "session-state" / f"{session}.json"
+    st = load_state(sf)
+    prev = dict(st)
+    st.update(fields)
+    save_state(sf, st)
+    return prev
+
+
+def git_info(cwd: str) -> tuple[Path, Path | None, str]:
+    """(main repo root, this checkout's root, branch); the cwd itself when it is not in a git repo."""
+    r = subprocess.run(["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"],
+                       capture_output=True, text=True)
+    out = r.stdout.split("\n")
+    if r.returncode != 0 or len(out) < 3:
+        return Path(cwd), None, ""
+    return Path(out[0]).parent, Path(out[1]), out[2]
+
+
+def thread_file(cfg: Path, root: Path) -> Path:
+    return cfg / "threads" / (re.sub(r"[^A-Za-z0-9]", "-", str(root)) + ".json")
+
+
+def next_step(reply: str) -> str:
+    clean = lambda t: " ".join(re.sub(r"[`*_#>]", "", t).split())  # noqa: E731
+    lines = [ln for ln in reply.splitlines() if ln.strip()]
+    for ln in lines:
+        m = NEXT.match(ln)
+        if m:
+            return clean(m.group(1))[:100]
+    if not lines:
+        return ""
+    sentences = [x for x in re.split(r"(?<=[.!?])\s+", clean(lines[-1])) if x]
+    return re.sub(r"^next(?: step)?s?:\s*", "", sentences[-1] if sentences else "", flags=re.I)[:100]
+
+
+def upsert_thread(cfg: Path, session: str, cwd: str, state: str, st: dict, reply: str) -> None:
+    root, top, branch = git_info(cwd)
+    handoff = ""
+    if top and branch and branch != "HEAD":
+        rel = f"docs/handoff/{branch.replace('/', '-')}.md"
+        handoff = rel if (top / rel).exists() else ""
+    f = thread_file(cfg, root)
+    try:
+        rows = json.loads(f.read_text())
+    except (OSError, ValueError):
+        rows = []
+    now = time.time()
+    row = {"session": session, "updated": now, "goal": (st.get("goal") or st.get("first") or st.get("title") or "")[:80], "state": state,
+           "next": next_step(reply), "handoff": handoff, "cwd": cwd}
+    rows = [r for r in rows if r.get("session") != session and now - r.get("updated", 0) < 30 * 86400]
+    rows.append(row)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(rows[-50:]))
+    tmp.replace(f)
+
+
+def thread_lines(cfg: Path, cwd: str, me: str, now: float | None = None) -> list[str]:
+    now = now or time.time()
+    root = git_info(cwd)[0]
+    try:
+        rows = json.loads(thread_file(cfg, root).read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    today = datetime.fromtimestamp(now, MT).date()
+    for r in sorted(rows, key=lambda r: -r.get("updated", 0)):
+        if r.get("session") == me or now - r.get("updated", 0) > THREAD_MAX_AGE:
+            continue
+        if r["state"].startswith("✓") and not open_items(cfg, r["session"]):
+            continue
+        at = datetime.fromtimestamp(r["updated"], MT)
+        when = f"today {at:%H:%M}" if at.date() == today else f"{at:%a %b %d %H:%M}"
+        tail = r["state"] + (f" — next: {r['next']}" if r.get("next") else "")
+        out.append(f"- {when} · {r.get('goal') or '(no goal found)'} · {tail}" + (f" · {r['handoff']}" if r.get("handoff") else ""))
+        if len(out) == THREAD_LINES:
+            break
+    if not out:
+        return []
+    return [f"Open threads in {root.name} (newest first). Open one only if Lashaw's prompt continues it; otherwise ignore this list:"] + out
+
+
+def cmd_threads() -> int:
+    try:
+        data = json.loads(sys.stdin.read())
+    except ValueError:
+        return 0
+    if data.get("source") != "startup":
+        return 0
+    transcript = data.get("transcript_path") or ""
+    cfg = config_for(Path(transcript) if transcript else None)
+    lines = thread_lines(cfg, data.get("cwd") or os.getcwd(), data.get("session_id") or "")
+    if lines:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
+    return 0
+
+
+def notify(project: str) -> None:
+    if os.environ.get("SESSION_STATE_DRY_RUN"):
+        print(f"NOTIFY {project}")
+        return
+    esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
+    subprocess.run(
+        ["osascript", "-e",
+         f'display notification "{esc("Done: nothing running, nothing waiting on you")}" with title "Claude Code" '
+         f'subtitle "{esc(project)}" sound name "Glass"'],
+        check=False,
+    )
+
+
+def hook(sub: str) -> int:
+    raw = sys.stdin.read()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return 0
+    session = data.get("session_id") or ""
+    transcript = data.get("transcript_path") or ""
+    cfg = config_for(Path(transcript) if transcript else None)
+    if not re.fullmatch(r"[\w-]+", session):
+        return 0
+    if sub == "prompt":
+        update(cfg, session, working=time.time())
+        return 0
+    r = subprocess.run([str(Path(__file__).resolve().parent / "your-turn"), "record"], input=raw, capture_output=True, text=True,
+                       env={**os.environ, "CLAUDE_CONFIG_DIR": str(cfg)})
+    out = r.stdout
+    sys.stdout.write(out)
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+    if data.get("agent_id") or data.get("agent_type"):
+        return 0  # a subagent's stop is not the session's
+    update(cfg, session, working=0)
+    if '"decision": "block"' in out:
+        return 0  # the turn goes on; nothing has ended
+    state, _, _ = state_of(transcript, idle=True) if transcript else ("✓ done", None, "")
+    prev = update(cfg, session, last=state).get("last", "")
+    if transcript:
+        upsert_thread(cfg, session, data.get("cwd") or os.getcwd(), state, load_state(cfg / "session-state" / f"{session}.json"),
+                      data.get("last_assistant_message") or "")
+    if state == "✓ done" and prev.startswith(("⏳", "👤")):
+        notify(Path(data.get("cwd") or os.getcwd()).name)
+    return 0
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        return 0
+    if args[0] == "open-tasks" and len(args) == 2:
+        try:
+            ids = open_tasks(Path(args[1]).expanduser())
+        except OSError as e:
+            print(e, file=sys.stderr)
+            return 1
+        print("\n".join(ids))
+        return 0
+    if args[0] == "threads":
+        return cmd_threads()
+    if args[0] in ("stop", "prompt"):
+        return hook(args[0])
+    print(state_of(args[0])[0])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

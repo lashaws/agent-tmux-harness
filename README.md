@@ -1,7 +1,8 @@
 # dotfiles
 
-LaShaw's terminal setup — tmux dashboard and shell auto-attach.
-Clone it on any Mac and run one command to get an identical tmux setup.
+LaShaw's terminal setup — tmux dashboard, shell auto-attach, and the Claude Code
+harness for both accounts (personal `~/.claude`, work `~/.claude-work`).
+Clone it on any Mac and run two commands to get the same setup.
 
 ## New machine
 
@@ -12,7 +13,11 @@ mkdir -p ~/Work/dev
 gh repo clone lashaws/dotfiles ~/Work/dev/dotfiles
 ln -s ~/Work/dev/dotfiles ~/dotfiles          # convenience symlink, optional
 bash ~/Work/dev/dotfiles/terminal-setup.sh
+bash ~/Work/dev/dotfiles/claude/harness.sh install
 ```
+
+Then sign in to each Claude account once: `claude` in your home folder (personal) and
+`claude` under `~/work` (work, which the `claude()` wrapper points at `~/.claude-work`).
 
 Quit iTerm once with `Cmd-Q` and reopen it afterwards.
 
@@ -28,7 +33,8 @@ added once.
 
 ## Making changes
 
-Edit the files here, then push so every other machine can pick them up:
+Edit the files here, then push so every other machine can pick them up. For the Claude
+harness, edit the live files as usual and run `bash claude/harness.sh capture` first.
 
 ```bash
 cd ~/Work/dev/dotfiles
@@ -39,11 +45,10 @@ git add -A && git commit -m "describe the change" && git push
 
 | File | What it does |
 |---|---|
-| `terminal-setup.sh` | Installs tmux + iTerm2 app, installs `tmux.conf` and the statusline script(s), writes `~/tmux-cheatsheet.md`, adds tmux auto-attach to `~/.zshrc` |
-| `update.sh` | `git pull` + re-run `terminal-setup.sh` |
+| `terminal-setup.sh` | Installs tmux + iTerm2 app, installs `tmux.conf`, writes `~/tmux-cheatsheet.md`, adds tmux auto-attach to `~/.zshrc` |
+| `update.sh` | `git pull`, re-run `terminal-setup.sh`, then `claude/harness.sh install` |
 | `tmux.conf` | The actual `~/.tmux.conf` — copied in as-is by the setup script |
-| `statusline.sh` | Claude Code status line (path/model/effort + 5h/7d/context usage bars) → installed to `~/.claude/statusline.sh` |
-| `statusline-work.sh` | Thin wrapper for a second ("work") Claude account — prefixes an orange `WORK` tag and delegates to `statusline.sh` → installed to `~/.claude-work/statusline.sh` (skipped if that dir doesn't exist) |
+| `claude/` | The Claude Code harness for both accounts — see below |
 | `tmux-last-output` | Backs the `prefix y/Y/S/C-s` copy bindings in `tmux.conf` — grabs the last command's output (or whole scrollback) from a pane, any length → installed to `~/.local/bin/tmux-last-output` |
 | `tmux-last-output.zsh` | zsh `preexec`/`precmd` hooks that stamp each pane with where the last command's output starts/ends, so the script above knows what to grab → installed to `~/.zsh/tmux-last-output.zsh`, sourced from `~/.zshrc` |
 | `tmux-cheatsheet.md` | Key bindings reference (also written to `~/tmux-cheatsheet.md` by the setup script) |
@@ -51,19 +56,31 @@ git add -A && git commit -m "describe the change" && git push
 ## What the setup script touches
 
 - `~/.tmux.conf` — backed up first, but only if the content actually changes
-- `~/.claude/statusline.sh` and `~/.claude-work/statusline.sh` — backed up first if different (the `.claude-work` one is skipped if that directory doesn't exist)
 - `~/.local/bin/tmux-last-output` and `~/.zsh/tmux-last-output.zsh` — installed, and a source line appended to `~/.zshrc` once
 - `~/tmux-cheatsheet.md`
 - `~/.zshrc` — appends a tmux auto-attach block and a tmux-last-output source line, each once
 
 It does **not** touch iTerm settings. See below.
 
-**One external dependency:** `statusline.sh` only takes effect if that account's
-`~/.claude/settings.json` has:
-```json
-"statusLine": { "type": "command", "command": "$HOME/.claude/statusline.sh" }
-```
-That's Claude Code's own config, not something this repo manages.
+## Claude Code harness (`claude/`)
+
+`claude/manifest.txt` lists every hand-made piece of both accounts: `CLAUDE.md`,
+`settings.json` (hooks, permissions, plugins, status line), `hooks/`, `bin/`
+(your-turn, session-state, sleep-mode), agents, personal skills, themes, the status
+lines, `~/.zsh/claude.zsh` (account switch, `twork`/`twiki`), `~/.zsh/your-turn-watch.zsh`
+and the doc-steward launch agent. `claude/home/` holds them at their `$HOME`-relative paths,
+with your home folder written as `__HOME__` so a different macOS user name still works.
+
+| Command | What it does |
+|---|---|
+| `bash claude/harness.sh capture` | Copies the live files into `claude/home/`, then scans them with gitleaks. Run it after changing the harness, then commit. |
+| `bash claude/harness.sh diff` | Shows what differs between this machine and the repo (exit 1 if anything does). |
+| `bash claude/harness.sh install` | Copies `claude/home/` onto this machine, backing up each replaced file to `~/.claude-harness-backup/<time>/`; relinks the work account's shared `your-turn`, `rate` and `sleep`; adds the `claude.zsh` source line to `~/.zshrc`; loads the doc-steward agent if `~/work/trueage` exists; installs each account's enabled plugins. Safe to re-run. |
+
+Deliberately **not** tracked: sign-ins and account state (`.claude.json`, Keychain),
+history, transcripts and memory (`projects/`), plugin caches, and skills synced from
+claude.ai or installed by other tools (`skills/synced`, `google-agents-cli-*`).
+Needs `jq`, `python3`, `tmux` and `gh` (the install names any that are missing).
 
 ## iTerm setup (one-time, manual)
 

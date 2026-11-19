@@ -1,0 +1,36 @@
+# The Claude Code harness, as paths relative to $HOME.
+# A directory is copied whole, minus .DS_Store, __pycache__, *.pyc and *.bak*.
+# `link <path> <target>` recreates a symlink instead of copying it.
+# Never list credentials, history, transcripts, memory or plugin caches here:
+# .claude.json, history.jsonl, projects/, sessions/, plugins/ stay on the machine.
+
+# Personal account (~/.claude)
+.claude/CLAUDE.md
+.claude/settings.json
+.claude/statusline.sh
+.claude/statusline-personal.sh
+.claude/hooks
+.claude/bin
+.claude/agents
+.claude/skills/grill-me
+.claude/skills/rate
+.claude/skills/sleep
+.claude/skills/your-turn
+.claude/themes
+
+# Work account (~/.claude-work)
+.claude-work/CLAUDE.md
+.claude-work/settings.json
+.claude-work/statusline.sh
+.claude-work/hooks
+.claude-work/skills/your-turn
+.claude-work/themes
+.claude-work/scheduled/doc-steward.sh
+link .claude-work/bin/your-turn ../../.claude/bin/your-turn
+link .claude-work/skills/rate ../../.claude/skills/rate
+link .claude-work/skills/sleep ../../.claude/skills/sleep
+
+# Shell and scheduler wiring
+.zsh/claude.zsh
+.zsh/your-turn-watch.zsh
+Library/LaunchAgents/com.lashaw.trueage-doc-steward.plist

@@ -1,0 +1,641 @@
+#!/usr/bin/env python3
+"""Per-session list of commands an agent handed to Lashaw ("Your turn" items).
+
+Agents tag a hand-over with a heading line `**Your turn** — <what it unblocks>`,
+then one line per step (what it does, output to expect) and its fenced block.
+This script records those blocks so they survive the scrollback.
+
+  your-turn record            Stop hook: read new transcript lines, save tagged
+                              blocks, clear items Lashaw ran with `!` in the prompt;
+                              block once if a hand-over lacks `Why yours:`
+  your-turn prompt            UserPromptSubmit hook: remind the agent of open items
+  your-turn match <command>   ids of open items (in any config) whose command equals it
+                              (the zsh watcher, ~/.zsh/your-turn-watch.zsh, calls this)
+  your-turn ran <id> <exit> [--out FILE|-] [--no-output]
+                              mark an item ran: exit code, time, redacted output (`-` reads
+                              stdin; --no-output stores nothing). Secret commands never store output
+  your-turn secret-cmd <command>
+                              exit 0 if the command prints secrets (the watcher then captures nothing)
+  your-turn wait <id>... [--timeout S]
+                              block until each item is ran/done; print exit code and the
+                              last 60 output lines. Exit 0 all ok, 1 otherwise, 2 timeout
+  your-turn count [session]   number of open items (status line)
+  your-turn first [session]   first open command, one line (notification)
+  your-turn list  [session]   open items as markdown (the /your-turn skill)
+  your-turn done  <id>... | all [session]
+                              mark items done (ids are unique across sessions)
+
+Lists live in <config>/pending/<session-id>.jsonl, where <config> is $CLAUDE_CONFIG_DIR or ~/.claude
+(work sessions run with ~/.claude-work); files idle 14 days are pruned. Output of a ran item is
+<config>/pending/<id>.out: redacted, mode 600, deleted once `wait` prints it, pruned after 24 h.
+"""
+
+import hashlib
+import json
+import math
+import os
+import re
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+CONFIG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
+PENDING = CONFIG / "pending"
+# Config dirs the zsh watcher matches against; YOUR_TURN_CONFIGS (colon-separated) overrides, for tests.
+WATCH_CONFIGS = [
+    Path(c) for c in (os.environ.get("YOUR_TURN_CONFIGS") or f"{Path.home() / '.claude'}:{Path.home() / '.claude-work'}").split(":") if c
+]
+OUT_CAP = 2000
+WAIT_TAIL = 60
+MT = ZoneInfo("America/Denver")
+PRUNE_DAYS = 14
+
+MARKER = re.compile(r"^\s*(?:#{1,6}\s+|\*\*|__)\s*Your turn\b(.*)$", re.IGNORECASE)
+HEADING = re.compile(r"^\s*#{1,6}\s")
+BOLD_LINE = re.compile(r"^\s*(\*\*|__)[^*_].*(\*\*|__)\s*:?\s*$")
+RULE = re.compile(r"^\s*(-{3,}|\*{3,})\s*$")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})\s*([\w+-]*)\s*$")
+LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+WHY_YOURS = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*Why yours\s*(?:\*\*|__)?\s*:", re.IGNORECASE | re.MULTILINE)
+
+
+def display_config() -> str:
+    home = str(Path.home())
+    c = str(CONFIG)
+    return "~" + c[len(home):] if c.startswith(home) else c
+
+
+def tool() -> str:
+    return f"{display_config()}/bin/your-turn"
+
+
+def norm(cmd: str) -> str:
+    return " ".join(cmd.split())
+
+
+def now_mt() -> str:
+    return datetime.now(MT).strftime("%Y-%m-%d %H:%M MT")
+
+
+def valid_session(s: str | None) -> bool:
+    return bool(s) and re.fullmatch(r"[A-Za-z0-9_-]+", s or "") is not None
+
+
+def path_for(session: str) -> Path:
+    return PENDING / f"{session}.jsonl"
+
+
+def latest_session() -> str | None:
+    files = sorted(PENDING.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0].stem if files else None
+
+
+def resolve(session: str | None) -> str | None:
+    return session if valid_session(session) else latest_session()
+
+
+def load(session: str) -> list[dict]:
+    p = path_for(session)
+    if not p.exists():
+        return []
+    items = []
+    for line in p.read_text().splitlines():
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return items
+
+
+def save(session: str, items: list[dict]) -> None:
+    PENDING.mkdir(parents=True, exist_ok=True)
+    p = path_for(session)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(i, separators=(",", ":")) + "\n" for i in items))
+    tmp.replace(p)
+
+
+def open_items(session: str | None) -> list[dict]:
+    return [i for i in load(session) if i.get("status") == "open"] if session else []
+
+
+def extract(text: str) -> list[dict]:
+    """Return {cmd, note, unblocks} for every fenced block under a Your turn heading."""
+    found: list[dict] = []
+    lines = text.splitlines()
+    inside = False
+    unblocks = ""
+    note: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = MARKER.match(line)
+        if m:
+            inside = True
+            unblocks = re.sub(r"^[\s*_:—–-]+", "", m.group(1)).strip().strip("*_").strip()
+            unblocks = re.sub(r"^unblocks:?\s+", "", unblocks, flags=re.IGNORECASE)
+            note = []
+            i += 1
+            continue
+        if inside and (HEADING.match(line) or BOLD_LINE.match(line) or RULE.match(line)):
+            inside = False
+        if not inside:
+            i += 1
+            continue
+        f = FENCE.match(line)
+        if f:
+            fence = f.group(1)
+            body = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith(fence):
+                body.append(lines[i])
+                i += 1
+            cmd = "\n".join(body).strip()
+            if cmd:
+                text_note = " ".join(LIST_MARK.sub("", n).strip() for n in note if n.strip())
+                found.append({"cmd": cmd, "note": text_note[:240], "unblocks": unblocks[:160]})
+            note = []
+        else:
+            note.append(line)
+        i += 1
+    return found
+
+
+def text_of(entry: dict) -> str:
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def prune() -> None:
+    cutoff = time.time() - PRUNE_DAYS * 86400
+    for p in PENDING.glob("*"):
+        if p.is_file() and p.stat().st_mtime < cutoff:
+            p.unlink(missing_ok=True)
+
+
+def msg_key(text: str) -> str:
+    return hashlib.sha1(norm(text).encode()).hexdigest()[:12]
+
+
+def cmd_record(data: dict) -> None:
+    """Save tagged blocks from this turn.
+
+    The final reply comes from the hook input's `last_assistant_message`: Claude Code
+    flushes it to the transcript only after Stop hooks run (seen 2026-11-13). Earlier
+    text blocks and `!` commands come from the transcript lines added since the last
+    run. A shared seen-key file stops the two paths recording one message twice.
+    """
+    session = data.get("session_id")
+    transcript = data.get("transcript_path")
+    if not valid_session(session):
+        return
+    PENDING.mkdir(parents=True, exist_ok=True)
+    seen_path = PENDING / f"{session}.seen"
+    seen = set(seen_path.read_text().split()) if seen_path.exists() else set()
+    items = load(session)
+    known_ids = {i["id"] for i in items}
+    new_ids: list[str] = []
+    changed = False
+
+    def add_from(text: str) -> None:
+        nonlocal changed
+        key = msg_key(text)
+        if key in seen:
+            return
+        seen.add(key)
+        for found in extract(text):
+            cmd = norm(found["cmd"])
+            if any(i["status"] == "open" and norm(i["cmd"]) == cmd for i in items):
+                continue
+            iid = hashlib.sha1(f"{key}|{cmd}".encode()).hexdigest()[:6]
+            if iid in known_ids:
+                continue
+            items.append({"id": iid, "status": "open", "at": now_mt(), **found})
+            known_ids.add(iid)
+            new_ids.append(iid)
+            changed = True
+
+    state_path = PENDING / f"{session}.offset"
+    if transcript and Path(transcript).exists():
+        try:
+            offset = int(state_path.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            offset = 0
+        if Path(transcript).stat().st_size < offset:
+            offset = 0
+        with open(transcript, "rb") as fh:
+            fh.seek(offset)
+            chunk = fh.read()
+        end = chunk.rfind(b"\n") + 1  # never consume a half-written last line
+        for raw in chunk[:end].splitlines():
+            if b"our turn" not in raw and b"bash-input" not in raw:
+                continue
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("isSidechain"):
+                continue
+            kind = entry.get("type")
+            if kind == "assistant":
+                add_from(text_of(entry))
+            elif kind == "user":
+                m = re.search(r"<bash-input>(.*?)</bash-input>", text_of(entry), re.S)
+                ran = norm(m.group(1)) if m else ""
+                for i in items:
+                    if ran and i["status"] == "open" and (ran == norm(i["cmd"]) or ran.startswith(norm(i["cmd"]))):
+                        i.update(status="done", done_at=now_mt(), how="ran with ! in the prompt")
+                        changed = True
+        state_path.write_text(str(offset + end))
+
+    last = data.get("last_assistant_message")
+    if isinstance(last, str) and "our turn" in last:
+        add_from(last)
+
+    if changed:
+        save(session, items)
+    seen_path.write_text("\n".join(sorted(seen)))
+    prune()
+    reason = gate_reason(data, last if isinstance(last, str) else "", [i for i in items if i["id"] in new_ids])
+    if reason:
+        print(json.dumps({"decision": "block", "reason": reason}))
+
+
+def is_subagent(data: dict) -> bool:
+    return bool(data.get("agent_id") or data.get("agent_type") or ("subagent" + "s/") in str(data.get("transcript_path", "")))
+
+
+def gate_reason(data: dict, reply: str, new_items: list[dict]) -> str:
+    """One block reason covering every gate that failed, or "" to let the turn stop.
+
+    Blocks at most once in a row: `stop_hook_active` is true on the Stop that follows a block.
+    """
+    if data.get("stop_hook_active") or is_subagent(data) or not reply.strip():
+        return ""
+    problems = []
+    handovers = sum(1 for line in reply.splitlines() if MARKER.match(line))
+    if handovers and len(WHY_YOURS.findall(reply)) < handovers:
+        problems.append(
+            "A Your turn hand-over has no `Why yours: <reason>` line. First try the step yourself (run it, "
+            "or use the CLI or API). If it truly cannot be yours, add one line `Why yours: <reason>` under the "
+            "heading naming what stops you: a named hook refusal, the permission classifier, a sign-in, MFA or QR, "
+            "a desktop or console app, or a decision reserved to Lashaw."
+        )
+    if new_items:
+        ids = " ".join(i["id"] for i in new_items)
+        problems.append(
+            f"Items recorded for Lashaw: {ids}. Start `{tool()} wait {ids}` now with Bash run_in_background, so you "
+            "are woken when Lashaw runs the command, then end the turn. Do not ask Lashaw to confirm or paste output."
+        )
+    return "Stop blocked once; fix these and finish:\n- " + "\n- ".join(problems) if problems else ""
+
+
+def render(items: list[dict], session: str) -> str:
+    if not items:
+        return f"Nothing is waiting on Lashaw in session {session}."
+    out = [f"{len(items)} open item(s) in session {session}:", ""]
+    for i in items:
+        out.append(f'- [{i["id"]}] handed over {i["at"]}' + (f' — unblocks: {i["unblocks"]}' if i.get("unblocks") else ""))
+        if i.get("note"):
+            out.append(f'  what: {i["note"]}')
+        out.append("  ```bash")
+        out.extend("  " + c for c in i["cmd"].splitlines())
+        out.append("  ```")
+    return "\n".join(out)
+
+
+def cmd_prompt(data: dict) -> None:
+    prune_out()
+    session = data.get("session_id")
+    items = open_items(session if valid_session(session) else None)
+    if not items:
+        return
+    lines = [
+        "Commands handed to Lashaw in this session that are still open (the your-turn list).",
+        "A zsh watcher marks an item ran, with exit code and output, when Lashaw runs it. Never ask Lashaw to confirm",
+        "or paste output: run `" + tool() + " wait <ids>` with Bash run_in_background after a hand-over, and read what it prints.",
+        "If Lashaw types \"done\" or \"ran\", or you can see the result read-only, clear the item with",
+        "`" + tool() + " done <id>`; re-hand an unfinished one under a Your turn heading only if it is still needed.",
+        "Each hand-over needs a `Why yours:` line.",
+    ]
+    for i in items[:10]:
+        first = i["cmd"].splitlines()[0]
+        lines.append(f'- [{i["id"]}] {first[:160]}' + (f' — {i["note"][:120]}' if i.get("note") else ""))
+    if len(items) > 10:
+        lines.append(f"- … and {len(items) - 10} more (`your-turn list`)")
+    print("\n".join(lines))
+
+
+def cap_lines(text: str) -> str:
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) > OUT_CAP:
+        half = OUT_CAP // 2
+        lines = lines[:half] + [f"... {len(lines) - OUT_CAP} lines omitted ..."] + lines[-half:]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+OUT_MAX_AGE = 24 * 3600
+NO_OUTPUT_NOTE = "output not captured (command prints secrets)"
+
+# Commands whose output is a secret: the watcher captures nothing for them. One list, searched anywhere
+# in the (whitespace-normalised) command so `cat .env | grep X` and `sudo aws ... get-secret-value` match.
+SECRET_CMD = [re.compile(p, re.IGNORECASE) for p in (
+    r"\bsecretsmanager\s+get-secret-value\b",
+    r"(?=.*--with-decryption)\bssm\s+get-parameter",
+    r"\bkms\s+decrypt\b",
+    r"\bprintenv\b",
+    r"(?:^|[;&|(]\s*)(?:sudo\s+)?env\s*(?:$|[;&|)>])",
+    r"\b(?:cat|less|more|head|tail|bat)\s+(?:-\S+\s+(?:\d+\s+)?)*(?:\S*/)?\.env[\w.-]*(?=\s|$|[;&|])",
+    r"\bsecurity\s+find-(?:generic|internet)-password\b",
+    r"\bop\s+(?:read|item\s+get)\b",
+    r"\bkubectl\s+(?:get|describe)\s+secrets?\b",
+    r"\baws\s+configure\s+(?:get|export-credentials)\b",
+    r"\bgh\s+auth\s+token\b",
+    r"\bsts\s+(?:assume-role\S*|get-session-token|get-federation-token)\b",
+    r"\b(?:admin-)?initiate-auth\b",
+    r"\bsso\s+get-role-credentials\b",
+    r"\bgenerate-db-auth-token\b",
+    r"\bget-login-password\b",
+    r"\bget-authorization-token\b",
+    r"\bvault\s+(?:read|kv\s+get)\b",
+    r"\becho\s+[\"']?\$\{?\w*(?:PASSWORD|SECRET|TOKEN|KEY)",
+)]
+
+
+def is_secret_cmd(command: str) -> bool:
+    c = norm(command)
+    return any(r.search(c) for r in SECRET_CMD)
+
+
+_HEXRUN = re.compile(r"[0-9a-fA-F]+")
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_KEYNAME = r"\w*(?:password|passwd|secret|token|api[_-]?key|client_secret|session_token)\w*"
+# (kind, regex, replacement). Order matters: specific shapes before the generic ones.
+REDACTIONS = [
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S), None),
+    ("jwt", re.compile(r"\beyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*"), None),
+    ("aws-key-id", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA)[A-Z0-9]{16}\b"), None),
+    ("github-token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})"), None),
+    ("token", re.compile(r"\b(?:xox[abprs]-[\w-]{10,}|(?:sk|pk|rk)_(?:live|test)_\w{8,}|sk-[\w-]{20,}|glpat-[\w-]{15,}|AIza[\w-]{35}|npm_\w{30,})"), None),
+    ("bearer", re.compile(r"(\bBearer\s+)[\w.~+/=-]{8,}", re.I), r"\1[REDACTED:bearer]"),
+    ("url-password", re.compile(r"\b((?:postgres(?:ql)?|mysql|redis|rediss|mongodb(?:\+srv)?|amqps?)://[^\s:/@]*:)[^\s@]+(@)", re.I), r"\1[REDACTED:url-password]\2"),
+    ("secret", re.compile(
+        r"(?P<k>(?<![:/])\b" + _KEYNAME + r"[\"']?\s*[=:]\s*)(?P<v>\"(?:\\.|[^\"\\])*\"|'[^']*'|[^\s,;]+)", re.I), "kv"),
+]
+_CODE_LINE = re.compile(r"\b(?:code|otp|mfa|verification)\b", re.I)
+_CODE = re.compile(r"(?<![\w.-])\d{4,8}(?![\w.-])")
+_CAND = re.compile(r"(?<![\w+/=-])[A-Za-z0-9+/=_-]{32,}(?![\w+/=-])")
+
+
+def entropy(t: str) -> float:
+    return -sum(t.count(c) / len(t) * math.log2(t.count(c) / len(t)) for c in set(t))
+
+
+def looks_secret(tok: str) -> bool:
+    if tok[0] in "/~." or _UUID.fullmatch(tok) or _HEXRUN.fullmatch(tok) and len(tok) in (32, 40, 56, 64, 96, 128):
+        return False
+    classes = sum(bool(re.search(p, tok)) for p in ("[a-z]", "[A-Z]", "[0-9]", r"[+/=_-]"))
+    return classes >= 3 and entropy(tok) >= 4.0
+
+
+def redact(text: str) -> tuple[str, int]:
+    n = 0
+
+    def tally(kind: str, repl):
+        def sub(m: re.Match) -> str:
+            nonlocal n
+            if kind == "secret":
+                v = m.group("v").strip("\"'")
+                if v.startswith(("arn:", "[REDACTED")) or v in ("", "null", "true", "false", "None") or "(sensitive" in v or v.startswith(("<", "(", "${", "var.")):
+                    return m.group(0)
+                n += 1
+                return m.group("k") + "[REDACTED:secret]"
+            n += 1
+            return m.expand(repl) if repl else f"[REDACTED:{kind}]"
+        return sub
+
+    for kind, rx, repl in REDACTIONS:
+        text = rx.sub(tally(kind, None if repl == "kv" else repl), text)
+
+    def code_line(line: str) -> str:
+        nonlocal n
+        if not _CODE_LINE.search(line):
+            return line
+        out, k = _CODE.subn("[REDACTED:code]", line)
+        n += k
+        return out
+
+    text = "\n".join(code_line(ln) for ln in text.split("\n"))
+
+    def entropic(m: re.Match) -> str:
+        nonlocal n
+        if not looks_secret(m.group(0)):
+            return m.group(0)
+        n += 1
+        return "[REDACTED:high-entropy]"
+
+    return _CAND.sub(entropic, text), n
+
+
+def prune_out() -> None:
+    cutoff = time.time() - OUT_MAX_AGE
+    for p in PENDING.glob("*.out"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def write_private(path: Path, text: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+
+
+def cmd_match(command: str) -> int:
+    want = norm(command)
+    for cfg in WATCH_CONFIGS:
+        for p in sorted((cfg / "pending").glob("*.jsonl")):
+            for line in p.read_text().splitlines():
+                try:
+                    i = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if i.get("status") == "open" and norm(i.get("cmd", "")) == want:
+                    print(f"{cfg}\t{i['id']}")
+    return 0
+
+
+def find_item(iid: str) -> tuple[str, dict, list[dict]] | None:
+    for p in PENDING.glob("*.jsonl"):
+        items = load(p.stem)
+        for i in items:
+            if i.get("id") == iid:
+                return p.stem, i, items
+    return None
+
+
+def cmd_ran(rest: list[str]) -> int:
+    if len(rest) < 2 or not rest[1].lstrip("-").isdigit():
+        print("usage: your-turn ran <id> <exit> [--out FILE|-] [--no-output]", file=sys.stderr)
+        return 2
+    iid, code = rest[0], int(rest[1])
+    prune_out()
+    found = find_item(iid)
+    if not found:
+        print(f"unknown item: {iid}", file=sys.stderr)
+        return 1
+    session, item, items = found
+    out_path = PENDING / f"{iid}.out"
+    no_output = "--no-output" in rest or is_secret_cmd(item.get("cmd", ""))
+    if "--out" in rest and not no_output:
+        PENDING.mkdir(parents=True, exist_ok=True)
+        arg = rest[rest.index("--out") + 1]
+        if arg == "-":
+            raw = sys.stdin.buffer.read().decode(errors="replace")
+        else:
+            raw = Path(arg).read_text(errors="replace") if Path(arg).exists() else None
+        if raw is not None:
+            clean, n = redact(raw)  # redact the whole text first, so the cap can never cut a secret in half
+            body = cap_lines(clean)
+            write_private(out_path, body + (f"{n} values redacted\n" if n else ""))
+    item.update(status="done", how="ran", exit=code, done_at=now_mt())
+    item.pop("no_output", None)
+    if no_output:
+        item["no_output"] = True
+    elif out_path.exists():
+        item["out"] = str(out_path)
+    save(session, items)
+    print(f"ran: {iid} exit {code}")
+    return 0
+
+
+def cmd_wait(rest: list[str]) -> int:
+    timeout = 6 * 3600.0
+    ids = []
+    k = 0
+    while k < len(rest):
+        if rest[k] == "--timeout" and k + 1 < len(rest):
+            timeout = float(rest[k + 1])
+            k += 2
+        else:
+            ids.append(rest[k])
+            k += 1
+    if not ids:
+        print("usage: your-turn wait <id>... [--timeout S]", file=sys.stderr)
+        return 2
+    prune_out()
+    deadline = time.time() + timeout
+    results: dict[str, dict] = {}
+    while True:
+        for iid in ids:
+            if iid in results:
+                continue
+            found = find_item(iid)
+            if not found:
+                results[iid] = {"missing": True}
+            elif found[1].get("status") != "open":
+                results[iid] = found[1]
+        if len(results) == len(ids):
+            break
+        if time.time() >= deadline:
+            print(f"timed out waiting for: {' '.join(i for i in ids if i not in results)}")
+            return 2
+        time.sleep(1)
+    ok = True
+    for iid in ids:
+        r = results[iid]
+        if r.get("missing"):
+            print(f"[{iid}] unknown item")
+            ok = False
+        elif "exit" in r:
+            print(f"[{iid}] ran {r.get('done_at', '')}, exit {r['exit']}")
+            ok = ok and r["exit"] == 0
+            out = Path(r["out"]) if r.get("out") else None
+            if out and out.exists():
+                print("  last output lines:")
+                print("\n".join("  " + ln for ln in out.read_text().splitlines()[-WAIT_TAIL:]))
+                out.unlink(missing_ok=True)  # read once, then gone
+            elif r.get("no_output"):
+                print(f"  ({NO_OUTPUT_NOTE})")
+            else:
+                print("  (no output captured)")
+        else:
+            print(f"[{iid}] cleared without a captured run ({r.get('how', 'done')})")
+    return 0 if ok else 1
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        return 0
+    sub, rest = args[0], args[1:]
+    if sub in ("record", "prompt"):
+        try:
+            data = json.load(sys.stdin)
+        except json.JSONDecodeError:
+            return 0
+        (cmd_record if sub == "record" else cmd_prompt)(data)
+        return 0
+    if sub == "match":
+        return cmd_match(" ".join(rest))
+    if sub == "ran":
+        return cmd_ran(rest)
+    if sub == "wait":
+        return cmd_wait(rest)
+    if sub == "secret-cmd":
+        return 0 if is_secret_cmd(" ".join(rest)) else 1
+    if sub == "count":
+        print(len(open_items(resolve(rest[0] if rest else None))))
+        return 0
+    if sub == "first":
+        items = open_items(resolve(rest[0] if rest else None))
+        if items:
+            print(norm(items[0]["cmd"])[:100])
+        return 0
+    if sub == "list":
+        session = resolve(rest[0] if rest else None)
+        print(render(open_items(session), session) if session else "No your-turn lists yet.")
+        return 0
+    if sub == "done":
+        if not rest:
+            print("usage: your-turn done <id>... | all [session]", file=sys.stderr)
+            return 2
+        if rest[0] == "all":
+            session = resolve(rest[1] if len(rest) > 1 else None)
+            targets = [session] if session else []
+            ids = None
+        else:
+            targets = [p.stem for p in PENDING.glob("*.jsonl")]
+            ids = set(rest)
+        cleared = []
+        for session in targets:
+            items = load(session)
+            hit = False
+            for i in items:
+                if i["status"] == "open" and (ids is None or i["id"] in ids):
+                    i.update(status="done", done_at=now_mt(), how="cleared")
+                    cleared.append(i["id"])
+                    hit = True
+            if hit:
+                save(session, items)
+        missing = sorted((ids or set()) - set(cleared))
+        print(f"cleared: {' '.join(cleared) or 'none'}" + (f"; not open or unknown: {' '.join(missing)}" if missing else ""))
+        return 0 if not missing else 1
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

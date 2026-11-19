@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""/sleep: put the Mac to sleep at a time, or once every live Claude session is done. Replaces `away`.
+
+  sleep-mode set [<hours>|<clock time>] [--session ID]
+        `8`, `1.5h`, `90m`: that long from now. `11pm`, `23:40`, `7:15am`: next such time, Mountain Time.
+        No time: sleep once every live session is ✓ done or 👤 waiting for HOLD seconds (default 300),
+        or after 8 hours regardless. Prints the away rules for the calling session.
+  sleep-mode off        cancel
+  sleep-mode status     what is scheduled
+  sleep-mode hook       PostToolUse / UserPromptSubmit hook (via hooks/sleep-schedule-hook.sh, which exits
+                        at once when no schedule exists): injects the away note once per session, and in
+                        time mode the wrap-up warning once per session from T-20 minutes
+  sleep-mode run        the detached timer (started by `set`; never run by hand)
+  sleep-mode parse <arg> [--now EPOCH]     print "<epoch> <HH:MM>" (tests)
+
+State: $SLEEP_MODE_HOME (default ~/.claude/sleep): schedule.json (shared by both configs; the status lines
+read it), reports/<date>.md, fired.json after a sleep. The timer is a detached process (setsid), so it
+outlives the session that set it, and `caffeinate -i -w <timer pid>` keeps the Mac from idle-sleeping
+meanwhile (stopped explicitly on fire or cancel, and by itself if the timer dies).
+Live session = a <config>/sessions/<pid>.json whose pid is alive and runs claude (session-state.live_sessions).
+After `pmset sleepnow` the timer survives the sleep; when its clock jumps (wall time moves, monotonic
+does not) it sends the morning notification naming the report.
+Env for tests: SLEEP_MODE_DRY_RUN=1 (never sleeps; logs the notification to notifications.log instead),
+SLEEP_MODE_HOLD, SLEEP_MODE_TICK (seconds), SLEEP_MODE_WARN (seconds, default 1200), SLEEP_MODE_CAP (seconds,
+default 28800), SLEEP_MODE_FAKE_WAKE=1 (dry run: pretend the Mac woke at once).
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.dont_write_bytecode = True
+HOME = Path.home()
+MT = ZoneInfo("America/Denver")
+BASE = Path(os.environ.get("SLEEP_MODE_HOME") or str(HOME / ".claude" / "sleep"))
+SCHED = BASE / "schedule.json"
+ENV_INT = lambda name, default: int(float(os.environ.get(name) or default))  # noqa: E731
+
+RULES = """Away rules for this session (set by /sleep; Lashaw is gone):
+- Do not ask questions or stop for approval inside the approved goal; keep working.
+- Take reversible decisions yourself and log each in your summary and handoff.
+- Anything that truly needs Lashaw goes under a **Your turn** heading (with a Why yours line); keep going on the rest.
+- {when}
+- Leave your handoff current and your work in a stopping state; the morning report reads each session's final reply."""
+
+
+def load_ss():
+    loader = importlib.machinery.SourceFileLoader("session_state", str(Path(__file__).resolve().parent / "session-state"))
+    spec = importlib.util.spec_from_loader("session_state", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def parse_when(arg: str, now: float) -> tuple[float, str]:
+    """Epoch and HH:MM (MT) for `8`, `1.5h`, `90m`, `11pm`, `23:40`, `7:15am`."""
+    a = arg.strip().lower().replace(" ", "")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(h|hrs?|hours?)?", a)
+    if m and not (m.group(2) is None and ":" in a):
+        at = now + float(m.group(1)) * 3600
+    elif m2 := re.fullmatch(r"(\d+(?:\.\d+)?)m(in)?", a):
+        at = now + float(m2.group(1)) * 60
+    elif m3 := re.fullmatch(r"(\d{1,2})(?::(\d{2}))?(am|pm)?", a):
+        hour, minute, ap = int(m3.group(1)), int(m3.group(2) or 0), m3.group(3)
+        if ap == "pm" and hour < 12:
+            hour += 12
+        if ap == "am" and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59 or (not ap and not m3.group(2)):
+            raise ValueError(f"cannot read a time from {arg!r}")
+        dt = datetime.fromtimestamp(now, MT)
+        target = dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= dt:
+            target += timedelta(days=1)
+        at = target.timestamp()
+    else:
+        raise ValueError(f"cannot read a time from {arg!r}; use hours (8, 1.5h), minutes (90m) or a clock time (11pm, 23:40)")
+    return at, datetime.fromtimestamp(at, MT).strftime("%H:%M")
+
+
+def load() -> dict | None:
+    try:
+        return json.loads(SCHED.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save(s: dict) -> None:
+    BASE.mkdir(parents=True, exist_ok=True)
+    tmp = SCHED.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(s))
+    tmp.replace(SCHED)
+
+
+def alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def kill(pid) -> None:
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def cancel() -> bool:
+    s = load()
+    if not s:
+        return False
+    kill(s.get("pid"))
+    kill(s.get("caffeinate"))
+    SCHED.unlink(missing_ok=True)
+    return True
+
+
+def when_text(s: dict) -> str:
+    if s["mode"] == "time":
+        return f"The Mac sleeps at {s['label']} MT; at T-20 minutes reach a stopping point."
+    return "The Mac sleeps once every live Claude session is done or waiting on Lashaw (held 5 minutes), or after 8 hours."
+
+
+def cmd_set(rest: list[str]) -> int:
+    session = ""
+    words = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--session" and i + 1 < len(rest):
+            session = rest[i + 1]
+            i += 2
+        else:
+            words.append(rest[i])
+            i += 1
+    arg = " ".join(words).strip()
+    if arg.lower() in ("off", "cancel", "stop"):
+        return cmd_off()
+    now = time.time()
+    cap = ENV_INT("SLEEP_MODE_CAP", 8 * 3600)
+    try:
+        at, label = parse_when(arg, now) if arg else (None, "")
+    except ValueError as e:
+        print(f"/sleep: {e}")
+        return 1
+    cancel()
+    s = {"mode": "time" if arg else "when-done", "at": at, "label": label, "created": now, "cap_at": now + cap,
+         "warned": [], "noted": [session] if session else [], "hold_since": None}
+    BASE.mkdir(parents=True, exist_ok=True)
+    log = open(BASE / "timer.log", "a")
+    timer = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "run"], start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    s["pid"] = timer.pid
+    s["caffeinate"] = subprocess.Popen(["caffeinate", "-i", "-w", str(timer.pid)], start_new_session=True,
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid
+    save(s)
+    print(f"Sleep scheduled: {'at ' + label + ' MT' if at else 'when every session is done'}. "
+          f"Timer pid {timer.pid}, caffeinate pid {s['caffeinate']} holds the Mac awake until then. Cancel with /sleep off.\n")
+    print(RULES.format(when=when_text(s)))
+    return 0
+
+
+def cmd_off() -> int:
+    print("Sleep cancelled; the Mac may idle-sleep again." if cancel() else "No sleep was scheduled.")
+    return 0
+
+
+def cmd_status() -> int:
+    s = load()
+    if not s:
+        print("No sleep scheduled.")
+        return 0
+    print(f"mode {s['mode']}" + (f", at {s['label']} MT" if s["mode"] == "time" else "")
+          + f", cap in {max(0, int(s['cap_at'] - time.time()) // 60)} min, timer {'alive' if alive(s.get('pid')) else 'DEAD'}")
+    return 0
+
+
+def cmd_hook() -> int:
+    s = load()
+    if not s:
+        return 0
+    try:
+        data = json.loads(sys.stdin.read())
+    except ValueError:
+        return 0
+    session = data.get("session_id") or ""
+    if not session or data.get("agent_id") or data.get("agent_type"):
+        return 0
+    parts = []
+    if session not in s["noted"]:
+        s["noted"].append(session)
+        parts.append(RULES.format(when=when_text(s)))
+    warn = ENV_INT("SLEEP_MODE_WARN", 1200)
+    if s["mode"] == "time" and session not in s["warned"] and time.time() >= s["at"] - warn:
+        s["warned"].append(session)
+        mins = max(0, int((s["at"] - time.time()) // 60))
+        parts.append(f"The Mac sleeps at {s['label']} MT, in about {mins} minutes. Reach a stopping point now: finish or park the "
+                     "current step, update your handoff, and end your turn with a summary. Do not start new long work.")
+    if not parts:
+        return 0
+    save(s)
+    event = data.get("hook_event_name") or "UserPromptSubmit"
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(parts)}}))
+    return 0
+
+
+# ---- the timer ----
+
+def quiet(ss) -> bool:
+    for x in ss.live_sessions():
+        tok = ss.state_of(str(x["transcript"]))[0] if x["transcript"] else "✓ done"
+        if tok.startswith(("⏳", "⚙")):
+            return False
+    return True
+
+
+def notify(text: str) -> None:
+    if os.environ.get("SLEEP_MODE_DRY_RUN"):
+        with open(BASE / "notifications.log", "a") as f:
+            f.write(text + "\n")
+        return
+    esc = lambda t: t.replace("\\", "\\\\").replace('"', '\\"')  # noqa: E731
+    subprocess.run(["osascript", "-e", f'display notification "{esc(text)}" with title "Claude Code" subtitle "Morning report" sound name "Glass"'],
+                   check=False)
+
+
+def tail_entries(path: Path, size: int = 1_500_000) -> list[dict]:
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        start = max(0, fh.tell() - size)
+        fh.seek(start)
+        raw = fh.read().split(b"\n")
+        if start:
+            raw = raw[1:]  # the first line of a mid-file read is cut off
+    out = []
+    for line in raw:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def real_prompt(e: dict) -> str:
+    if e.get("type") != "user" or e.get("isSidechain"):
+        return ""
+    c = (e.get("message") or {}).get("content")
+    text = c if isinstance(c, str) else "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text") if isinstance(c, list) else ""
+    text = text.strip()
+    return "" if not text or text.startswith("<") or text.startswith("[") else text
+
+
+def final_reply(e: dict) -> str:
+    if e.get("type") != "assistant" or e.get("isSidechain"):
+        return ""
+    c = (e.get("message") or {}).get("content")
+    return "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text").strip() if isinstance(c, list) else ""
+
+
+def write_report(ss, s: dict, reason: str) -> Path:
+    cfgs = [Path(c) for c in os.environ["SESSION_STATE_CONFIGS"].split(":")] if os.environ.get("SESSION_STATE_CONFIGS") \
+        else [HOME / ".claude", HOME / ".claude-work"]
+    found: dict[str, dict] = {}
+    for cfg in cfgs:
+        for f in (cfg / "projects").glob("*/*.jsonl"):
+            if f.stat().st_mtime >= s["created"]:
+                found[f.stem] = {"cfg": cfg, "transcript": f, "cwd": ""}
+    for x in ss.live_sessions():
+        if x["transcript"]:
+            found.setdefault(x["session"], {"cfg": x["cfg"], "transcript": x["transcript"], "cwd": ""})["cwd"] = x["cwd"]
+    now = datetime.now(MT)
+    lines = [f"# Morning report {now:%Y-%m-%d}", "", f"Sleeping at {now:%H:%M} MT ({reason}). Scheduled {datetime.fromtimestamp(s['created'], MT):%H:%M} MT.", ""]
+    if not found:
+        lines.append("No session was active since the schedule was set.")
+    for sid, x in sorted(found.items(), key=lambda kv: -kv[1]["transcript"].stat().st_mtime):
+        ents = tail_entries(x["transcript"])
+        cwd = x["cwd"] or next((e["cwd"] for e in ents if e.get("cwd")), "")
+        goal = next((real_prompt(e) for e in reversed(ents) if real_prompt(e)), "(no prompt found)")
+        reply = next((final_reply(e) for e in reversed(ents) if final_reply(e)), "")
+        state = ss.state_of(str(x["transcript"]))[0]
+        pend = x["cfg"] / "pending" / f"{sid}.jsonl"
+        items = []
+        try:
+            for ln in pend.read_text().splitlines():
+                i = json.loads(ln)
+                if i.get("status") == "open":
+                    items.append(i)
+        except (OSError, ValueError):
+            pass
+        lines += [f"## {Path(cwd).name or sid}", f"- session `{sid}`", f"- last goal: {' '.join(goal.split())[:200]}", f"- state: {state}",
+                  f"- open Your-turn items: {len(items)}"]
+        lines += [f"  - [{i['id']}] {' '.join(i['cmd'].split())[:120]}" for i in items]
+        if reply:
+            lines += ["- final reply (last lines):", ""] + [f"  > {ln}" for ln in reply.splitlines()[-10:]]
+        lines.append("")
+    d = BASE / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{now:%Y-%m-%d}.md"
+    n = 1
+    while p.exists():
+        n += 1
+        p = d / f"{now:%Y-%m-%d}-{n}.md"
+    p.write_text("\n".join(lines) + "\n")
+    return p
+
+
+def fire(ss, s: dict, reason: str) -> None:
+    report = write_report(ss, s, reason)
+    kill(s.get("caffeinate"))
+    SCHED.unlink(missing_ok=True)
+    (BASE / "fired.json").write_text(json.dumps({"at": time.time(), "reason": reason, "report": str(report), "dry": bool(os.environ.get("SLEEP_MODE_DRY_RUN"))}))
+    dry = bool(os.environ.get("SLEEP_MODE_DRY_RUN"))
+    if not dry:
+        subprocess.run(["pmset", "sleepnow"], check=False)
+    # Wake detection: wall time moves during sleep, the monotonic clock does not.
+    w0, m0 = time.time(), time.monotonic()
+    deadline = w0 + 24 * 3600
+    while time.time() < deadline:
+        time.sleep(ENV_INT("SLEEP_MODE_TICK", 20) if not dry else 0.2)
+        gap = (time.time() - w0) - (time.monotonic() - m0)
+        if gap > 60 or (dry and os.environ.get("SLEEP_MODE_FAKE_WAKE")):
+            notify(f"Good morning. Report: {report}")
+            return
+        if dry:
+            return
+
+
+def cmd_run() -> int:
+    ss = load_ss()
+    me = os.getpid()
+    born = time.time()
+    tick = ENV_INT("SLEEP_MODE_TICK", 20)
+    hold = ENV_INT("SLEEP_MODE_HOLD", 300)
+    while True:
+        s = load()
+        if not s or s.get("pid") != me:
+            if time.time() - born < 5:
+                time.sleep(0.1)  # `set` writes the schedule just after starting this process
+                continue
+            return 0  # cancelled or replaced
+        now = time.time()
+        if s["mode"] == "time":
+            if now >= s["at"]:
+                fire(ss, s, f"scheduled {s['label']}")
+                return 0
+        elif now >= s["cap_at"]:
+            fire(ss, s, "8-hour cap reached")
+            return 0
+        elif quiet(ss):
+            if s.get("hold_since") is None:
+                s["hold_since"] = now
+                save(s)
+            elif now - s["hold_since"] >= hold:
+                fire(ss, s, "every session done or waiting")
+                return 0
+        elif s.get("hold_since") is not None:
+            s["hold_since"] = None
+            save(s)
+        time.sleep(tick)
+
+
+def main() -> int:
+    a = sys.argv[1:]
+    if not a:
+        print(__doc__)
+        return 0
+    sub, rest = a[0], a[1:]
+    if sub == "set":
+        return cmd_set(rest)
+    if sub == "off":
+        return cmd_off()
+    if sub == "status":
+        return cmd_status()
+    if sub == "hook":
+        return cmd_hook()
+    if sub == "run":
+        return cmd_run()
+    if sub == "parse":
+        now = float(rest[rest.index("--now") + 1]) if "--now" in rest else time.time()
+        words = [w for j, w in enumerate(rest) if w != "--now" and (j == 0 or rest[j - 1] != "--now")]
+        try:
+            at, label = parse_when(" ".join(words), now)
+        except ValueError as e:
+            print(e)
+            return 1
+        print(f"{int(at)} {label}")
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
