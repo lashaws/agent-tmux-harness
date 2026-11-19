@@ -1,0 +1,37 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "gemini-api-key"
+    }
+  },
+  "ide": {
+    "hasSeenNudge": true
+  },
+  "hooks": {
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "name": "lashaw-guards",
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-adapter.py gemini pre-tool",
+            "timeout": 30000
+          }
+        ],
+        "matcher": "run_shell_command|write_file|replace"
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "handback-guard",
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-adapter.py gemini stop",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}

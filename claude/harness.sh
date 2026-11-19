@@ -105,6 +105,10 @@ cmd_install() {
     echo "  created an empty ~/.claude/local/rules.md"
   fi
 
+  # Codex and Gemini read generated copies of ~/.claude/agent-rules.md (+ local rules).
+  "$HOME/.claude/bin/agent-rules-sync" && echo "  synced ~/.codex/AGENTS.md and ~/.gemini/GEMINI.md"
+  [ -f "$HOME/.codex/hooks.json" ] && echo "  Codex: open codex once and approve the new hooks when it asks (hooks need review)"
+
   # Shell: source claude.zsh after tmux-last-output.zsh (your-turn-watch needs its stamps).
   if ! grep -q 'zsh/claude.zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# --- Claude Code: work/personal account switch, twork/twiki, your-turn watcher ---\n[ -f ~/.zsh/claude.zsh ] && source ~/.zsh/claude.zsh\n' >> "$HOME/.zshrc"

@@ -8,8 +8,7 @@ curator gates, egress rules and clinical-scope rules.
 - **Finish the whole goal in this session.** A list of findings is where the work starts: fix
   what you find instead of reporting it. Send independent work to subagents in one message.
 - **Approval stands.** Once Lashaw approves a plan or a step, don't ask again about anything
-  inside it. Don't end a turn with "want me to…?" or with a list of steps for them to do (a Stop
-  hook blocks such an ending once).
+  inside it. Don't end a turn with "want me to…?" or with a list of steps for them to do.
 - **When a step has to be Lashaw's** (a permission denial, a sign-in, MFA, a QR code, a
   curator-only command), put the exact command in this message: each in its own fenced
   ```bash block, no `cd … &&`, each with what it does and the output to expect. Never write
@@ -52,34 +51,10 @@ curator gates, egress rules and clinical-scope rules.
   an idea is worth doing and in scope, do it instead of suggesting it. Raise something only if
   it needs Lashaw's decision or is a risk they'd want to know about. In a clinical record, a
   contradiction or a safety concern always counts as a risk. Otherwise say nothing.
-- **Fewest words, still precise.** Bullets, numbered lists and one-line items over paragraphs, in
-  replies and in docs. "I ran X and got Y" must read differently from "Y is probably why". No
-  caveman-style shorthand.
 
-## How the work gets done (all projects)
+## Working rules shared with every agent on this Mac
 
-- **Judge; delegate the building.** The main session keeps the judgment, the review and the
-  answer Lashaw reads. Building, sweeps and checks go to cheaper subagents (Sonnet; Haiku for
-  lookups), independent ones in one message. Re-read what a subagent pasted before trusting it.
-- **Spawn writers as writers.** A subagent started read-only (Explore, a reviewer, a verifier)
-  can't be given write access later through SendMessage; the permission classifier refuses it.
-- **Live claims carry evidence.** A claim about a running system comes with the command that
-  observed it and its output. Config isn't behavior; a doc isn't the system.
-- **Walk Lashaw through human steps.** When a step needs a person (sign-in, MFA, a web console,
-  a desktop app), use the `walkthrough` skill: Lashaw does only the sign-in; you drive the rest.
-- **Plans by dependency, never dates.** Use the `plan-visual` skill: tiers, not a calendar, and
-  an HTML visual for big plans.
-- **Automation fixes or blocks, never just reports.** "Automated" means one command does the
-  whole job, not a schedule. Add cron, launchd or cloud routines only when Lashaw names one.
-- **Harness fixes trigger themselves.** When Lashaw keeps asking for something, the fix fires on
-  their own words or a hook, never a /command they must remember.
-- **Small tools we write over third-party ones.** Prefer a small dependency-free tool to another
-  company's MCP server or package; a guard asks Lashaw before adding either.
-- **Merged branches go without asking.** In Lashaw's personal repos, delete branches already
-  merged into main (local and remote) once `git branch --merged main` or the PR confirms it.
-  Company repos follow their own tidy rules.
-- **Instruction files stay short.** CLAUDE.md, AGENTS.md and GEMINI.md stay at or under 200
-  lines (a guard refuses growth past it); workflows go in skills.
+@~/.claude/agent-rules.md
 
 ## This Mac only
 

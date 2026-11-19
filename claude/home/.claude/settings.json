@@ -118,6 +118,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/agent-rules-sync",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

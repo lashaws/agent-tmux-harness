@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-adapter.py codex pre-tool",
+            "statusMessage": "Checking Lashaw's guards"
+          }
+        ],
+        "matcher": "Bash|apply_patch"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-adapter.py codex stop",
+            "statusMessage": "Checking for a handback ending"
+          }
+        ]
+      }
+    ]
+  }
+}
