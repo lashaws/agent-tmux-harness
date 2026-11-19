@@ -3,6 +3,8 @@
 # `link <path> <target>` recreates a symlink instead of copying it.
 # Never list credentials, history, transcripts, memory or plugin caches here:
 # .claude.json, history.jsonl, projects/, sessions/, plugins/ stay on the machine.
+# ~/.claude/local/ (this Mac's own rules, guards and env, run by hooks/local-layer.sh) is never
+# captured; install only creates an empty local/rules.md so CLAUDE.md's import resolves.
 
 # Personal account (~/.claude)
 .claude/CLAUDE.md
@@ -17,6 +19,8 @@
 .claude/skills/rate
 .claude/skills/sleep
 .claude/skills/your-turn
+.claude/skills/walkthrough
+.claude/skills/plan-visual
 .claude/themes
 
 # Work account (~/.claude-work)
@@ -30,6 +34,8 @@
 link .claude-work/bin/your-turn ../../.claude/bin/your-turn
 link .claude-work/skills/rate ../../.claude/skills/rate
 link .claude-work/skills/sleep ../../.claude/skills/sleep
+link .claude-work/skills/walkthrough ../../.claude/skills/walkthrough
+link .claude-work/skills/plan-visual ../../.claude/skills/plan-visual
 
 # Shell and scheduler wiring
 .zsh/claude.zsh

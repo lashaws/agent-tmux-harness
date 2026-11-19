@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Example plan: move reporting to a new data store</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f27; --muted: #5a6372; --line: #d7dbe3;
+    --accent: #2457c5; --human: #b4530a; --human-bg: #fdf1e4; --done: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --surface: #1b2029; --text: #e8ebf1; --muted: #9aa3b2; --line: #333b49;
+      --accent: #7aa2f7; --human: #f0a463; --human-bg: #2c2118; --done: #5cc58f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 2rem 1.25rem 3rem; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .lede { color: var(--muted); margin: 0 0 1.25rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: .875rem; color: var(--muted); margin-bottom: 1.5rem; }
+  .legend span::before { content: ""; display: inline-block; width: .8rem; height: .8rem; border-radius: 3px;
+    margin-right: .4rem; vertical-align: -1px; border: 2px solid var(--line); }
+  .legend .l-human::before { border-color: var(--human); background: var(--human-bg); }
+  .tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 1.25rem; align-items: start; }
+  .tier { background: color-mix(in srgb, var(--surface) 55%, transparent); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; }
+  .tier h2 { font-size: 1rem; margin: 0 0 .15rem; }
+  .tier .sub { font-size: .8125rem; color: var(--muted); margin: 0 0 .85rem; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: .75rem .85rem; margin-bottom: .75rem; }
+  .card:last-child { margin-bottom: 0; }
+  .card.human { border-left-color: var(--human); background: var(--human-bg); }
+  .card h3 { font-size: .95rem; margin: 0 0 .25rem; }
+  .card p { margin: 0 0 .4rem; font-size: .875rem; }
+  .meta { font-size: .8125rem; color: var(--muted); margin: .15rem 0 0; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .tag { display: inline-block; font-size: .75rem; font-weight: 600; color: var(--human); margin-bottom: .3rem; }
+  .id { color: var(--accent); font-weight: 700; margin-right: .35rem; }
+  .card.human .id { color: var(--human); }
+  footer { margin-top: 2rem; font-size: .8125rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Example plan: move reporting to a new data store</h1>
+  <p class="lede">Ordered by what depends on what. Tier 1 has no prerequisites; each later tier needs only items in earlier tiers.</p>
+  <div class="legend">
+    <span class="l-auto">Agent can do it alone</span>
+    <span class="l-human">Needs Lashaw (sign-in or decision)</span>
+  </div>
+
+  <div class="tiers">
+    <section class="tier" aria-labelledby="t1">
+      <h2 id="t1">Tier 1: no prerequisites</h2>
+      <p class="sub">Start any of these now, in parallel.</p>
+      <article class="card" id="a">
+        <h3><span class="id">A</span>Inventory current reports</h3>
+        <p>List every report, its source tables and who reads it.</p>
+        <p class="meta"><b>Unblocks:</b> C, D</p>
+      </article>
+      <article class="card human" id="b">
+        <span class="tag">NEEDS LASHAW: DECISION</span>
+        <h3><span class="id">B</span>Choose the target store</h3>
+        <p>Pick between the two shortlisted options.</p>
+        <p class="meta"><b>Unblocks:</b> C, E</p>
+      </article>
+    </section>
+
+    <section class="tier" aria-labelledby="t2">
+      <h2 id="t2">Tier 2: needs Tier 1</h2>
+      <p class="sub">Each item waits on the Tier 1 items named in it.</p>
+      <article class="card" id="c">
+        <h3><span class="id">C</span>Design the new schema</h3>
+        <p>Map each report's inputs onto the chosen store.</p>
+        <p class="meta"><b>Needs:</b> A, B &nbsp; <b>Unblocks:</b> F</p>
+      </article>
+      <article class="card human" id="d">
+        <span class="tag">NEEDS LASHAW: SIGN-IN</span>
+        <h3><span class="id">D</span>Sign in to the vendor console</h3>
+        <p>One sign-in; the agent drives everything after it.</p>
+        <p class="meta"><b>Needs:</b> A &nbsp; <b>Unblocks:</b> E</p>
+      </article>
+      <article class="card" id="e">
+        <h3><span class="id">E</span>Provision the store</h3>
+        <p>Create the instance, roles and access rules.</p>
+        <p class="meta"><b>Needs:</b> B, D &nbsp; <b>Unblocks:</b> F</p>
+      </article>
+    </section>
+
+    <section class="tier" aria-labelledby="t3">
+      <h2 id="t3">Tier 3: needs Tier 2</h2>
+      <p class="sub">Starts only when the Tier 2 items it names are done.</p>
+      <article class="card" id="f">
+        <h3><span class="id">F</span>Migrate and verify reports</h3>
+        <p>Load data, run old and new side by side, compare totals.</p>
+        <p class="meta"><b>Needs:</b> C, E &nbsp; <b>Unblocks:</b> nothing (end of plan)</p>
+      </article>
+    </section>
+  </div>
+  <footer>Cards in orange need a person. Everything else the agent does and checks itself.</footer>
+</main>
+</body>
+</html>

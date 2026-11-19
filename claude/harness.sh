@@ -98,6 +98,13 @@ cmd_install() {
     echo "  linked ~/$path -> $target"; changed=$((changed + 1))
   done < <(links)
 
+  # Machine-only layer (never captured): CLAUDE.md imports local/rules.md, so make sure it exists.
+  if [ ! -f "$HOME/.claude/local/rules.md" ]; then
+    mkdir -p "$HOME/.claude/local/hooks/pre-tool-use"
+    printf '# This Mac only (not in dotfiles)\n\nAdd rules for this machine alone here.\n' > "$HOME/.claude/local/rules.md"
+    echo "  created an empty ~/.claude/local/rules.md"
+  fi
+
   # Shell: source claude.zsh after tmux-last-output.zsh (your-turn-watch needs its stamps).
   if ! grep -q 'zsh/claude.zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# --- Claude Code: work/personal account switch, twork/twiki, your-turn watcher ---\n[ -f ~/.zsh/claude.zsh ] && source ~/.zsh/claude.zsh\n' >> "$HOME/.zshrc"

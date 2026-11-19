@@ -33,6 +33,11 @@
             "type": "command",
             "command": "$HOME/.claude-work/hooks/trueage-auto-tidy.sh",
             "timeout": 90
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/local-layer.sh session-start",
+            "timeout": 5
           }
         ]
       },
@@ -54,6 +59,11 @@
             "type": "command",
             "command": "$HOME/.claude/bin/session-state stop",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/stop-handback-guard.py",
+            "timeout": 5
           }
         ]
       }
@@ -88,6 +98,33 @@
             "timeout": 5
           }
         ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/guard-third-party.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/local-layer.sh pre-tool-use",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Bash|Edit|Write|MultiEdit"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/guard-instruction-size.py",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
       }
     ]
   },

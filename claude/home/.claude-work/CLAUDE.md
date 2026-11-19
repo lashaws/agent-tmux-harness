@@ -14,7 +14,7 @@ Lashaw has written "complete this autonomously, spin up a browser to walk me thr
 otherwise finish on your own" in dozens of prompts. Assume it on every task.
 
 - If a step needs a human (sign-in, MFA, a secret, a console or desktop app), open the headed CDP
-  Chrome (memory: live-test-walkthrough-recipe). Lashaw does only the sign-in; you drive the rest
+  Chrome (the `walkthrough` skill; trueage specifics in memory live-test-walkthrough-recipe). Lashaw does only the sign-in; you drive the rest
   and check it. For a desktop or SaaS tool, get the one sign-in, then drive it through its CLI or API.
 - Also stop for a design in Fred's zone that he hasn't approved.
 - Live checks and smoke tests go to a background `verifier`, so the browser work stays out of the
