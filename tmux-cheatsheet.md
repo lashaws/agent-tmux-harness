@@ -35,6 +35,7 @@ prefix first (or just click).
 |----------------------------|-------------------------------------------|
 | Reload config after edits  | `Ctrl-b` then `r`                         |
 | Rename current session     | `Ctrl-b` then `$`                         |
+| Name a Claude pane         | `/rename <name>` in Claude (else it names itself from your first prompt) |
 | Copy text                  | hold `Option` while dragging (iTerm), or drag-select normally and it auto-copies |
 
 **The one habit to build:** stop closing terminal windows to "clean up" — detach
