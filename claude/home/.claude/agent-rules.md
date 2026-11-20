@@ -34,7 +34,7 @@ subagents, SendMessage), use your tool's nearest equivalent.
 - **Harness fixes trigger themselves.** When Lashaw keeps asking for something, the fix fires on
   their own words or a hook, never a /command they must remember.
 - **Small tools we write over third-party ones.** Prefer a small dependency-free tool to another
-  company's MCP server or package; a guard asks Lashaw before adding either.
+  company's MCP server or package.
 - **Merged branches go without asking.** In Lashaw's personal repos, delete branches already
   merged into main (local and remote) once `git branch --merged main` or the PR confirms it.
   Company repos follow their own tidy rules.
