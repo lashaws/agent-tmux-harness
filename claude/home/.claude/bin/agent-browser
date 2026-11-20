@@ -1,18 +1,25 @@
 #!/bin/bash
-# agent-browser: a dedicated, visible Google Chrome that Claude drives through the
-# chrome-devtools MCP server while Lashaw does sign-ins, MFA and secrets by hand.
+# agent-browser: a dedicated, visible Google Chrome that Claude drives while Lashaw does
+# sign-ins, MFA and secrets by hand. All our own code: page control is
+# agent-browser-cdp.mjs next to this file (raw DevTools Protocol, no dependencies).
 #
-# This is the launch recipe from Google's chrome-devtools-mcp docs: the real Chrome app,
-# its own profile (never the default one), remote debugging on 127.0.0.1 only. Nothing is
-# launched by an automation framework, so there are no automation flags to remove.
-# Sign-ins persist in the profile, so each site needs Lashaw's sign-in only once.
+# The real Chrome app, its own profile (never the default one), remote debugging on
+# 127.0.0.1 only. Nothing is launched by an automation framework, so there are no automation
+# flags to remove. Sign-ins persist in the profile: each site needs Lashaw once.
 #
 #   agent-browser start [url]        launch (or reuse) the window; open url in it
 #   agent-browser status             running or not, and the open tabs
 #   agent-browser wait <regex> [s]   block until a tab's URL matches (default 900 s);
 #                                    run in the background during a hand-over
 #   agent-browser stop               quit this Chrome only (not Lashaw's own Chrome)
+#   agent-browser help               the page commands: snapshot, click, type, goto, ...
 set -euo pipefail
+
+# Personal accounts only. Work sessions (CLAUDE_CONFIG_DIR=~/.claude-work) have their own
+# headed-CDP Chrome and profiles; they must never drive this one.
+case "${CLAUDE_CONFIG_DIR:-}" in
+  *claude-work*) echo "agent-browser is the personal browser; work sessions use their own CDP Chrome (memory: live-test-walkthrough-recipe)" >&2; exit 4 ;;
+esac
 
 PORT="${AGENT_BROWSER_PORT:-9222}"
 PROFILE="$HOME/Library/Application Support/agent-browser/profile"
@@ -48,7 +55,8 @@ case "$cmd" in
     pat="${1:?usage: agent-browser wait <url-regex> [seconds]}"; limit="${2:-900}"
     end=$((SECONDS + limit))
     while [ $SECONDS -lt $end ]; do
-      if up && tabs | grep -Eq -- "$pat"; then echo "matched: $pat"; tabs; exit 0; fi
+      # match against "url | title" with the display indent stripped, so ^ anchors work
+      if up && tabs | sed 's/^ *//' | grep -Eq -- "$pat"; then echo "matched: $pat"; tabs; exit 0; fi
       sleep 2
     done
     echo "timed out after ${limit}s waiting for a tab matching: $pat"; up && tabs; exit 1 ;;
@@ -56,5 +64,10 @@ case "$cmd" in
     pid="$(main_pid)"; [ -z "$pid" ] && { echo "not running"; exit 0; }
     kill -TERM "$pid"; for _ in $(seq 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
     echo "stopped" ;;
-  *) sed -n '2,14p' "$0"; exit 2 ;;
+  help) sed -n '2,15p' "$0"; echo; exec node "$(dirname "$0")/agent-browser-cdp.mjs" help ;;
+  tabs|use|new|close|goto|snapshot|click|type|select|press|scroll|wait-text|screenshot|eval)
+    up || { echo "agent browser is not running: agent-browser start" >&2; exit 2; }
+    export AGENT_BROWSER_PORT="$PORT"
+    exec node "$(dirname "$0")/agent-browser-cdp.mjs" "$cmd" "$@" ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

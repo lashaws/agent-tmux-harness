@@ -8,7 +8,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 # The interactive `claude` shell function sets this for ~/work; launchd doesn't run that function,
 # so set it here, or the run uses the default ~/.claude config (no CPP_GATE=off, no DELEGATED_FLOW).
 export CLAUDE_CONFIG_DIR="$HOME/.claude-work"
-repo="$HOME/work/trueage"
+repo="$HOME/work/quantum"
 logdir="$HOME/.claude-work/scheduled/logs"
 mkdir -p "$logdir"
 log="$logdir/doc-steward-$(date +%F).json"
