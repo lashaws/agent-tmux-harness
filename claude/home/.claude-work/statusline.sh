@@ -4,4 +4,4 @@
 input=$(cat)
 badges=$(printf '%s' "$input" | "$HOME/.claude/statusline-badge.sh")
 line=$(printf '%s' "$input" | "$HOME/.claude/statusline.sh")
-printf ' \033[1;48;5;208;38;5;232m WORK \033[0m %s%s\n' "$badges" "$line"
+printf ' \033[1;48;2;70;50;61;38;2;243;139;168m WORK \033[0m %s%s\n' "$badges" "$line"

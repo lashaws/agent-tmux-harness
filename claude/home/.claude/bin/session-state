@@ -2,17 +2,21 @@
 """One-token state of a Claude Code session, for the status line and the done-notification.
 
   session-state <transcript_path|session_id>
-      👤 2 waiting on you [· ⏳ …|· ⚙ working]  open Your-turn items, or an unanswered AskUserQuestion
-      ⏳ 2 agents · 1 shell · 1 monitor   session-bound background work still running
+      👤 approve prompt [· N waiting on you] [· ⏳ …|· ⚙ working]  a tool-permission dialog is open
+      👤 2 waiting on you [· ⏳ …|· ⚙ working]  open Your-turn items, an unanswered AskUserQuestion or other
+                                          dialog ("input needed"), running `human` shells
+      ⏳ 2 agents · 1 shell · 1 monitor   session-bound background work still running (nested agents included)
       ⚙ working                           the session is mid-turn
       ✓ done                              nothing running, nothing waiting
-  Priority: 👤 waiting > ⏳ running > ⚙ working > ✓ done; what else is going on rides after 👤. A background
-  `your-turn wait` (the watcher for a hand-over) is not counted as a running shell: it only waits on Lashaw.
-  Working is read from <config>/sessions/<pid>.json (status "busy", pid alive and a claude process), which
-  survives an interrupt (no Stop fires then) and a dead process. With no live session file (a session whose
+  Priority: 👤 waiting > ⏳ running > ⚙ working > ✓ done; what else is going on rides after 👤.
+  Live status is read from <config>/sessions/<pid>.json (pid alive and a claude process): "busy" is ⚙ working
+  (it survives an interrupt, where no Stop fires, and a dead process); "waiting" with waitingFor "permission
+  prompt" leads the badge with `approve prompt`; waitingFor "input needed" is one thing waiting on Lashaw (not
+  added again when an unanswered AskUserQuestion is already counted). A waiting session is not working, and
+  `stop` (the turn ended) ignores the waiting state. With no live session file (a session whose
   process died) the UserPromptSubmit marker counts only while the transcript changed in the last 30 minutes. A bare session id is looked up under <config>/projects/*/.
   session-state open-tasks <transcript_path>
-                          ids of shell/monitor tasks still running in a subagent transcript, one per line
+                          ids of shell/monitor/human tasks still running in a subagent transcript, one per line
                           (sidechain entries included, same structured parse, no cache); the SubagentStop
                           hook ~/.claude/hooks/subagent-background-tasks.sh calls it. Exits 1 on an unreadable file.
   session-state stop      Stop hook (stdin = hook JSON): forwards the input to `your-turn record`
@@ -28,7 +32,14 @@
                           line to <config>/threads/<project>.json (title, state, next/last line, handoff).
 
 Background work comes from the transcript, parsed from the structured entries only (a tool result
-that merely quotes "running in background" counts for nothing):
+that merely quotes "running in background" counts for nothing). Background Bash shells have a kind:
+  shell    ordinary work: counts in ⏳
+  waiter   `your-turn wait ...`: waits on Lashaw through an item the Your-turn list already shows; counts nowhere
+  human    `agent-browser wait ...` or a command with the comment `# waits on Lashaw` (any case): waits on
+           Lashaw with no Your-turn item; each running one counts in 👤 "N waiting on you"
+  browser  `node .../cdp-driver.mjs ...`: an idle long-lived browser server; counts nowhere
+Agents that are still running are followed into <transcript dir>/<session>/subagents/agent-<id>.jsonl
+(recursively, cached under "subs" in the state file): their agents, shells, monitors and human waits count too.
   start  Bash toolUseResult.backgroundTaskId, "Command running in background with ID: X" /
          "was moved to the background (ID: X", async Agent toolUseResult.agentId, Monitor "taskId"
   end    <task-notification> with status completed|failed|killed|stopped, TaskStop's
@@ -65,7 +76,9 @@ NEXT = re.compile(r"^\W*(?:next(?: step)?s?|todo|remaining|still (?:to do|open)|
 ENDED = {"completed", "failed", "killed", "stopped"}
 WAITER = re.compile(r"\byour-turn\s+wait\b")
 HOOK_TEXT = ("Stop hook feedback", "PreToolUse", "PostToolUse", "SessionStart", "UserPromptSubmit", "Caveat:")
-STATE_VERSION = 2  # bump to make every cached parse start over (2: waiter shells tracked apart)
+WAITS_ON_ME = re.compile(r"agent-browser\s+wait\b|#\s*waits on lashaw", re.I)
+CDP_DRIVER = re.compile(r"cdp-driver\.mjs")
+STATE_VERSION = 3  # bump to make every cached parse start over (3: shell kinds, nested "subs")
 RECENT_MAX = 8
 
 
@@ -121,9 +134,11 @@ def apply(entry: dict, st: dict, sidechain: bool = False) -> None:
             if not isinstance(b, dict) or b.get("type") != "tool_use":
                 continue
             inp = b.get("input") or {}
-            if b.get("name") == "Bash" and WAITER.search(str(inp.get("command", ""))):
-                # `your-turn wait` only waits on Lashaw; it is not work the session is doing
-                st["waiters"] = (st["waiters"] + [b.get("id")])[-50:]
+            cmd = str(inp.get("command", "")) if b.get("name") == "Bash" else ""
+            if kind_of(cmd):
+                st["kinds"][b.get("id")] = kind_of(cmd)
+                if len(st["kinds"]) > 50:
+                    st["kinds"].pop(next(iter(st["kinds"])))
             elif b.get("name") == "AskUserQuestion":
                 questions.append(b.get("id"))
             elif b.get("name") == "SendMessage":
@@ -152,13 +167,22 @@ def apply(entry: dict, st: dict, sidechain: bool = False) -> None:
             text = body if isinstance(body, str) else "\n".join(texts(body))
             tm = BG_TEXT.match(text)
             if tur.get("backgroundTaskId") or tm:
-                add(tasks, tur.get("backgroundTaskId") or tm.group(1), "waiter" if tid in st["waiters"] else "shell")
+                add(tasks, tur.get("backgroundTaskId") or tm.group(1), st["kinds"].get(tid, "shell"))
             elif tur.get("isAsync") and tur.get("agentId"):
                 add(tasks, tur["agentId"], "agent")
             elif tur.get("taskId") and "persistent" in tur and text.startswith("Monitor started"):
                 add(tasks, tur["taskId"], "monitor")
     if tur.get("task_id") and "Successfully stopped task" in str(tur.get("message", "")):
         tasks.pop(tur["task_id"], None)
+
+
+def kind_of(cmd: str) -> str:
+    """Kind of a background Bash command that is not ordinary work, else ""."""
+    if WAITER.search(cmd):
+        return "waiter"
+    if WAITS_ON_ME.search(cmd):
+        return "human"
+    return "browser" if CDP_DRIVER.search(cmd) else ""
 
 
 def add(tasks: dict, tid: str, kind: str) -> None:
@@ -182,14 +206,14 @@ def load_state(sf: Path) -> dict:
     try:
         st = json.loads(sf.read_text())
         if isinstance(st.get("tasks"), dict) and isinstance(st.get("questions"), list):
-            for k, v in (("goal", ""), ("first", ""), ("title", ""), ("last", ""), ("working", 0), ("waiters", [])):
+            for k, v in (("goal", ""), ("first", ""), ("title", ""), ("last", ""), ("working", 0), ("kinds", {}), ("subs", {})):
                 st.setdefault(k, v)
             if st.get("v") != STATE_VERSION:  # older parse: keep the hook-written fields, reparse the transcript
-                st.update(v=STATE_VERSION, size=-1, mtime=-1, offset=0, tasks={}, questions=[], waiters=[], goal="", first="", title="")
+                st.update(v=STATE_VERSION, size=-1, mtime=-1, offset=0, tasks={}, questions=[], kinds={}, subs={}, goal="", first="", title="")
             return st
     except (OSError, ValueError):
         pass
-    return {"v": STATE_VERSION, "size": -1, "mtime": -1, "offset": 0, "tasks": {}, "questions": [], "waiters": [], "last": "",
+    return {"v": STATE_VERSION, "size": -1, "mtime": -1, "offset": 0, "tasks": {}, "questions": [], "kinds": {}, "subs": {}, "last": "",
             "working": 0, "goal": "", "first": "", "title": ""}
 
 
@@ -206,25 +230,61 @@ def refresh(transcript: Path, sf: Path) -> dict:
     s = transcript.stat()
     if (s.st_size, s.st_mtime_ns) == (st["size"], st["mtime"]):
         return st
+    ingest(transcript, st, s)
+    save_state(sf, st)
+    return st
+
+
+def ingest(path: Path, st: dict, s: os.stat_result, sidechain: bool = False) -> None:
+    """Parse what was appended to `path` since st["offset"] into st."""
     if s.st_size < st["offset"]:
-        st.update(offset=0, tasks={}, questions=[], goal="", first="")
-    with open(transcript, "rb") as fh:
+        st.update(offset=0, tasks={}, questions=[], kinds={}, goal="", first="")
+    with open(path, "rb") as fh:
         fh.seek(st["offset"])
         chunk = fh.read()
     end = chunk.rfind(b"\n") + 1  # never consume a half-written last line
     for raw in chunk[:end].split(b"\n"):
         # cheap prefilter: only lines that can change the state are parsed
         if not (b"task-notification" in raw or b"tool_result" in raw or b"AskUserQuestion" in raw or b"SendMessage" in raw
-                or b"your-turn" in raw or b"/goal" in raw or b"ai-title" in raw or (not st["first"] and b'"user"' in raw)):
+                or b"your-turn" in raw or b"/goal" in raw or b"ai-title" in raw or (not st["first"] and b'"user"' in raw)
+                or b"agent-browser" in raw or b"cdp-driver" in raw or (b'"Bash"' in raw and b"waits on lashaw" in raw.lower())):
             continue
         try:
             entry = json.loads(raw)
         except ValueError:
             continue
-        apply(entry, st)
+        apply(entry, st, sidechain)
     st.update(offset=st["offset"] + end, size=s.st_size, mtime=s.st_mtime_ns)
-    save_state(sf, st)
-    return st
+
+
+def nested(transcript: Path, st: dict) -> tuple[list[dict], bool]:
+    """Running tasks of every running agent's subagent transcript, recursively (cached in st["subs"]).
+    Returns (tasks, whether the cache changed)."""
+    sdir = transcript.parent / transcript.stem / "subagents"
+    subs, seen, out, changed = st["subs"], set(), [], False
+    todo = [i for i, t in st["tasks"].items() if t["kind"] == "agent" and t["running"]]
+    while todo:
+        aid = todo.pop()
+        if aid in seen:
+            continue
+        seen.add(aid)
+        sub = subs.setdefault(aid, {"size": -1, "mtime": -1, "offset": 0, "tasks": {}, "questions": [], "kinds": {}, "goal": "", "first": "-", "title": ""})
+        try:
+            s = (sdir / f"agent-{aid}.jsonl").stat()
+            if (s.st_size, s.st_mtime_ns) != (sub["size"], sub["mtime"]):
+                ingest(sdir / f"agent-{aid}.jsonl", sub, s, sidechain=True)
+                changed = True
+        except OSError:
+            pass
+        for i, t in sub["tasks"].items():
+            if t["running"]:
+                out.append(t)
+                if t["kind"] == "agent":
+                    todo.append(i)
+    for aid in [a for a in subs if a not in seen]:
+        del subs[aid]
+        changed = True
+    return out, changed
 
 
 def open_tasks(transcript: Path) -> list[str]:
@@ -237,7 +297,7 @@ def open_tasks(transcript: Path) -> list[str]:
             continue
         if isinstance(entry, dict):
             apply(entry, st, sidechain=True)
-    return sorted(i for i, t in st["tasks"].items() if t["running"] and t["kind"] in ("shell", "monitor"))
+    return sorted(i for i, t in st["tasks"].items() if t["running"] and t["kind"] in ("shell", "monitor", "human"))
 
 
 def live_sessions(cfgs: list[Path] | None = None) -> list[dict]:
@@ -259,15 +319,17 @@ def live_sessions(cfgs: list[Path] | None = None) -> list[dict]:
             if match in cmd:
                 hits = list((cfg / "projects").glob(f"*/{e.get('sessionId')}.jsonl"))
                 out.append({"cfg": cfg, "session": e.get("sessionId"), "pid": pid, "cwd": e.get("cwd", ""),
-                            "status": e.get("status", ""), "transcript": hits[0] if hits else None})
+                            "status": e.get("status", ""), "waitingFor": e.get("waitingFor", ""), "transcript": hits[0] if hits else None})
     return out
 
 
-def is_working(cfg: Path, session: str, st: dict, transcript: Path) -> bool:
+def live_status(cfg: Path, session: str, st: dict, transcript: Path) -> tuple[bool, str]:
+    """(working, waitingFor): "busy" is working; "waiting" gives "permission prompt" or "input needed"."""
     live = [x for x in live_sessions([cfg]) if x["session"] == session]
     if live:
-        return live[0]["status"] == "busy"
-    return bool(st.get("working")) and time.time() - transcript.stat().st_mtime < WORKING_STALE
+        w = live[0]
+        return w["status"] == "busy", (w["waitingFor"] or "input needed") if w["status"] == "waiting" else ""
+    return bool(st.get("working")) and time.time() - transcript.stat().st_mtime < WORKING_STALE, ""
 
 
 def open_items(cfg: Path, session: str) -> int:
@@ -285,32 +347,43 @@ def open_items(cfg: Path, session: str) -> int:
     return n
 
 
-def token(st: dict, waiting: int, working: bool = False) -> str:
+def token(st: dict, waiting: int, working: bool = False, waiting_for: str = "", extra: list[dict] | tuple = ()) -> str:
     """👤 whenever something waits on Lashaw (it leads, so the badge answers "do I have to do anything?"),
-    then ⏳ running work, else ⚙ working, else ✓ done. `your-turn wait` watcher shells never count as running."""
-    counts = {"agent": 0, "shell": 0, "monitor": 0}
-    for t in st["tasks"].values():
+    then ⏳ running work, else ⚙ working, else ✓ done. `extra` is the running work of nested agents.
+    Watcher shells (`your-turn wait`) and browser servers never count; `human` shells count as waiting on Lashaw."""
+    counts = {"agent": 0, "shell": 0, "monitor": 0, "human": 0}
+    for t in [*st["tasks"].values(), *extra]:
         if t["running"] and t["kind"] in counts:
             counts[t["kind"]] += 1
     names = {"agent": ("agent", "agents"), "shell": ("shell", "shells"), "monitor": ("monitor", "monitors")}
-    running = [f"{n} {names[k][n != 1]}" for k, n in counts.items() if n]
-    busy = ("⏳ " + " · ".join(running)) if running else ("⚙ working" if working else "")
-    asks = waiting + len(st["questions"])
-    if asks:
-        return f"👤 {asks} waiting on you" + (f" · {busy}" if busy else "")
+    running = [f"{n} {names[k][n != 1]}" for k, n in counts.items() if n and k in names]
+    busy = ("⏳ " + " · ".join(running)) if running else ("⚙ working" if working and not waiting_for else "")
+    asks = waiting + len(st["questions"]) + counts["human"]
+    if waiting_for == "input needed" and not st["questions"]:
+        asks += 1
+    perm = waiting_for == "permission prompt"
+    if perm or asks:
+        head = ["approve prompt"] if perm else []
+        if asks:
+            head.append(f"{asks} waiting on you")
+        return "👤 " + " · ".join(head) + (f" · {busy}" if busy else "")
     return busy or "✓ done"
 
 
 def state_of(arg: str, idle: bool = False) -> tuple[str, Path | None, str]:
-    """`idle` leaves ⚙ out: the Stop hook asks what the session is once its turn has ended."""
+    """`idle` leaves ⚙ and the waiting state out: the Stop hook asks what the session is once its turn has ended."""
     transcript = find_transcript(arg)
     if not transcript:
         return "✓ done", None, arg
     cfg = config_for(transcript)
     session = transcript.stem
-    st = refresh(transcript, cfg / "session-state" / f"{session}.json")
-    working = not idle and is_working(cfg, session, st, transcript)
-    return token(st, open_items(cfg, session), working), cfg, session
+    sf = cfg / "session-state" / f"{session}.json"
+    st = refresh(transcript, sf)
+    extra, changed = nested(transcript, st)
+    if changed:
+        save_state(sf, st)
+    working, waiting_for = (False, "") if idle else live_status(cfg, session, st, transcript)
+    return token(st, open_items(cfg, session), working, waiting_for, extra), cfg, session
 
 
 def update(cfg: Path, session: str, **fields) -> dict:
