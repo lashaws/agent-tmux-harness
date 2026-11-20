@@ -12,7 +12,7 @@
 # once. A lock keeps two sessions starting together from tidying at the same time.
 
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
-git -C "$dir" remote get-url origin 2>/dev/null | grep -q -E 'Quantum-Retirement-Solutions/(quantum|trueage)(\.git)?$' || exit 0
+git -C "$dir" remote get-url origin 2>/dev/null | grep -q -E '__WORK_GH_ORG__/(quantum|trueage)(\.git)?$' || exit 0
 [ -x "$dir/scripts/git-tidy.sh" ] || exit 0
 
 state="$HOME/.claude-work/state/trueage-auto-tidy"

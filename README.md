@@ -77,6 +77,13 @@ with your home folder written as `__HOME__` so a different macOS user name still
 | `bash claude/harness.sh diff` | Shows what differs between this machine and the repo (exit 1 if anything does). |
 | `bash claude/harness.sh install` | Copies `claude/home/` onto this machine, backing up each replaced file to `~/.claude-harness-backup/<time>/`; relinks the work account's shared `your-turn`, `rate` and `sleep`; adds the `claude.zsh` source line to `~/.zshrc`; loads the doc-steward agent if `~/work/trueage` exists; installs each account's enabled plugins. Safe to re-run. |
 
+This repo is public, so capture also keeps private context out of it:
+
+- The auto-mode classifier block is stripped from every `settings.json` (it describes employer accounts and personal projects). `install` keeps the machine's own block when it replaces a `settings.json`; `diff` compares without it.
+- `~/.claude/local/public-scrub.tsv` (local, mode 600, never captured) maps `real<TAB>placeholder` per line (`#` comments allowed). Capture swaps real to placeholder in text files, longest first; `install` swaps back when the file exists, else the placeholders stay.
+- After capture, a leak gate scans the whole repo for every real value (case-insensitive) and for a leftover auto-mode block. On a hit it prints `file:line`, exits non-zero and you must not commit. Capture also refuses to run without the map.
+- A fresh Mac needs its own auto-mode block (set in Claude Code) and its own `public-scrub.tsv`.
+
 Deliberately **not** tracked: sign-ins and account state (`.claude.json`, Keychain),
 history, transcripts and memory (`projects/`), plugin caches, and skills synced from
 claude.ai or installed by other tools (`skills/synced`, `google-agents-cli-*`).
