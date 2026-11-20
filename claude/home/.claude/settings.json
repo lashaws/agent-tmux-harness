@@ -170,7 +170,8 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "$HOME/.claude/statusline-personal.sh"
+    "command": "$HOME/.claude/statusline-personal.sh",
+    "refreshInterval": 5
   },
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": false,

@@ -72,6 +72,66 @@ stj.pop("v"); stj["tasks"] = {"bg1": {"kind": "shell", "running": True}}
 sf.write_text(json.dumps(stj))
 check("parse: pre-v2 cache is reparsed", ss.state_of(str(tr), idle=True)[0], "👤 1 waiting on you · ⏳ 1 shell")
 
+# --- defect 1: live permission prompt / input needed
+st0 = {"tasks": {}, "questions": []}
+check("token: permission prompt leads", ss.token(st0, 0, False, "permission prompt"), "👤 approve prompt")
+check("token: permission prompt + running", ss.token(st2, 0, False, "permission prompt"), "👤 approve prompt · ⏳ 1 shell")
+check("token: permission prompt + items", ss.token(st0, 1, False, "permission prompt"), "👤 approve prompt · 1 waiting on you")
+check("token: input needed is one ask", ss.token(st0, 0, False, "input needed"), "👤 1 waiting on you")
+check("token: input needed not doubled with a question", ss.token({"tasks": {}, "questions": ["q"]}, 0, False, "input needed"), "👤 1 waiting on you")
+check("token: waiting is not working", ss.token(st0, 0, True, "input needed"), "👤 1 waiting on you")
+(tmp / "sessions").mkdir(exist_ok=True)
+sess_file = tmp / "sessions" / f"{os.getpid()}.json"
+sess_file.write_text(json.dumps({"pid": os.getpid(), "sessionId": "perm-1", "status": "waiting", "waitingFor": "permission prompt"}))
+os.environ["SESSION_STATE_PROC_MATCH"] = ""
+ptr = proj / "perm-1.jsonl"
+ptr.write_text(json.dumps({"type": "user", "message": {"content": "do the thing please"}}) + "\n")
+check("live: permission prompt", ss.state_of(str(ptr))[0], "👤 approve prompt")
+check("live: stop ignores the prompt", ss.state_of(str(ptr), idle=True)[0], "✓ done")
+sess_file.write_text(json.dumps({"pid": os.getpid(), "sessionId": "perm-1", "status": "waiting", "waitingFor": "input needed"}))
+check("live: input needed", ss.state_of(str(ptr))[0], "👤 1 waiting on you")
+sess_file.unlink()
+del os.environ["SESSION_STATE_PROC_MATCH"]
+
+# --- defects 2 and 3: human and browser shells
+hl = [{"type": "user", "message": {"content": "sign me in to google please"}},
+      a_tool("h1", "~/.claude/bin/agent-browser wait '^https://myaccount\\.google\\.com/' 900"), u_res("h1", "bgh1"),
+      a_tool("h2", "while ! ok; do sleep 5; done  # Waits on Lashaw"), u_res("h2", "bgh2"),
+      a_tool("h3", "node ~/.claude/skills/walkthrough/cdp-driver.mjs --port 9400"), u_res("h3", "bgh3"),
+      a_tool("h4", "npm run build"), u_res("h4", "bgh4")]
+htr = proj / "human-1.jsonl"
+htr.write_text("".join(json.dumps(x) + "\n" for x in hl))
+check("parse: human waits count in 👤, browser server counts nowhere", ss.state_of(str(htr), idle=True)[0], "👤 2 waiting on you · ⏳ 1 shell")
+check("open-tasks: human blocks a stop, browser does not", ss.open_tasks(htr), ["bgh1", "bgh2", "bgh4"])
+
+# --- defect 4: nested work in subagent transcripts
+def agent_res(tid, aid):
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "Async agent launched"}]},
+            "toolUseResult": {"isAsync": True, "agentId": aid}}
+
+
+def side(e):
+    return {**e, "isSidechain": True}
+
+
+ntr = proj / "nest-1.jsonl"
+ntr.write_text("".join(json.dumps(x) + "\n" for x in [{"type": "user", "message": {"content": "run the whole fleet please"}}, agent_res("n1", "aaa"), agent_res("n2", "ddd")]))
+sub = proj / "nest-1" / "subagents"
+sub.mkdir(parents=True)
+(sub / "agent-aaa.jsonl").write_text("".join(json.dumps(side(x)) + "\n" for x in [
+    agent_res("m1", "bbb"), a_tool("m2", "sleep 99"), u_res("m2", "bgm2"),
+    a_tool("m3", "~/.claude/bin/agent-browser wait x 900"), u_res("m3", "bgm3")]))
+(sub / "agent-bbb.jsonl").write_text("".join(json.dumps(side(x)) + "\n" for x in [agent_res("k1", "ccc")]))
+(sub / "agent-ccc.jsonl").write_text("")
+(sub / "agent-ddd.jsonl").write_text(json.dumps(side(a_tool("d1", "sleep 5"))) + "\n" + json.dumps(side(u_res("d1", "bgd1"))) + "\n")
+check("nested: agents and shells counted recursively", ss.state_of(str(ntr), idle=True)[0], "👤 1 waiting on you · ⏳ 4 agents · 2 shells")
+end_note = {"type": "queue-operation", "operation": "enqueue", "content": "<task-notification><task-id>aaa</task-id><status>completed</status></task-notification>"}
+with open(ntr, "a") as fh:
+    fh.write(json.dumps(end_note) + "\n")
+check("nested: a finished agent's subtree is not counted", ss.state_of(str(ntr), idle=True)[0], "⏳ 1 agent · 1 shell")
+(sub / "agent-ddd.jsonl").write_text(json.dumps(side(a_tool("d1", "sleep 5"))) + "\n" + json.dumps(side(u_res("d1", "bgd1"))) + "\n" + json.dumps(side(agent_res("d2", "eee"))) + "\n")
+check("nested: cache picks up appended lines", ss.state_of(str(ntr), idle=True)[0], "⏳ 2 agents · 1 shell")
+
 # --- Stop gates
 it = item("abc123", "gcloud auth login", note="signs in")
 d = {"session_id": "s"}

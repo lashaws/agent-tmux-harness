@@ -22,7 +22,7 @@ _tsess() {  # $1=session name  $2=base dir
   tmux has-session -t "$1" 2>/dev/null || tmux new-session -d -s "$1" -c "$2"
   if [ -n "$TMUX" ]; then tmux switch-client -t "$1"; else tmux attach-session -t "$1"; fi
 }
-twork() { _tsess work "$HOME/work/trueage"; }
+twork() { _tsess work "$HOME/work/quantum"; }
 twiki() { _tsess wiki "$HOME/life-wiki"; }
 
 # your-turn: mark handed-over commands done when Lashaw runs them in tmux.

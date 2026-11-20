@@ -26,7 +26,7 @@ Scripts that exit lose that state.
    Node >= 22, no dependencies. It attaches if Chrome already listens on the chrome port, else launches it.
    Set `CHROME_BIN` for a non-default Chrome path. Omit `--headless` when Lashaw must sign in.
 4. Ask for the sign-in in your reply, one line: which window, what to sign in with. Prefilling the email
-   is fine. Wait for the page to show signed in (check with `/eval`); never ask "did you sign in?".
+   is fine. Wait for the page to show signed in (check with `/eval`); never ask "did you sign in?". If you poll for the sign-in with a background command, end it with `# waits on Lashaw` so the status line shows 👤.
 
 ## 2. Drive it with curl
 
