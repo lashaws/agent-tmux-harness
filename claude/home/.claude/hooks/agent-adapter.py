@@ -14,7 +14,7 @@ becomes a refusal whose reason tells the agent to get Lashaw's approval in chat 
 import json, os, re, subprocess, sys
 
 H = os.path.expanduser("~/.claude/hooks")
-PRE = [[f"{H}/guard-third-party.py"], [f"{H}/guard-instruction-size.py"], [f"{H}/local-layer.sh", "pre-tool-use"]]
+PRE = [[f"{H}/guard-instruction-size.py"], [f"{H}/local-layer.sh", "pre-tool-use"]]
 STOP = [[f"{H}/stop-handback-guard.py"]]
 
 def patch_to_claude(patch):

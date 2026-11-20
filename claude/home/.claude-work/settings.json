@@ -116,11 +116,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/guard-third-party.py",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "$HOME/.claude/hooks/local-layer.sh pre-tool-use",
             "timeout": 5
           }
