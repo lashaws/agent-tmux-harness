@@ -197,48 +197,6 @@
   "theme": "custom:lashaw",
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
-  "autoMode": {
-    "allow": [
-      "$defaults",
-      "Bash(bd:*) in __HOME__/life-wiki — routine issue-tracker use (61× in recent transcripts)"
-    ],
-    "soft_deny": [
-      "$defaults",
-      "git push / git remote add / git remote set-url in __HOME__/life-wiki — repo hard rule is local-git-only, no remote ever configured or pushed to",
-      "git add -A / git add . / git add --all / git commit -a / git commit -am in __HOME__/life-wiki — shared working tree; CLAUDE.md requires explicit-path staging only",
-      "writes to audio files (*.m4a, *.mp3, *.wav, *.mp4, *.aac) or direct edits inside ingest/ or any raw/ folder in __HOME__/life-wiki — repo hard rules forbid committing audio and hand-editing pre-sanitized/raw sources",
-      "In __HOME__/dev/quarry (public repo github.com/lashaws/quarry): git commit or push when the author/committer email is not lashawsalta@gmail.com, or when the diff contains trueage, americantrust, lsalta or real schema/connection details — public history must never carry the work identity or private schema",
-      "Adding a headless mode, a fast/no-delay flag, or removing human_pause/human_scroll pacing in the Facebook miner (__HOME__/dev/grapevine/research/facebook/) — standing rule: always human-paced, headed browser, modest call budgets, to avoid flagging the real account",
-      "Copying, uploading, pasting, or committing anything from __HOME__/dev-archive/sensitive-review/ — unrotated credentials and regulated data awaiting rotation then deletion; reading key names to help rotate is fine"
-    ],
-    "environment": [
-      "### Org-wide",
-      "**Organization**: None configured",
-      "**Cloud provider(s)**: None configured",
-      "**Repository visibility**: __HOME__/life-wiki is private and local-only (no remotes). Projects under __HOME__/dev are personal repos; github.com/lashaws/quarry is PUBLIC — treat everything pushed there as world-readable. Others: assume private unless a visibility check shows public",
-      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
-      "**Secrets management**: local files only — repo's own .gitignore excludes `.env`, `*.key`, `.claude/private/`, `.claude/reference/alert-smtp-credentials`, `.beads-credential-key`; never commit or expose these",
-      "**Default / protected branches**: Not queryable via gh (no remote; default branch unknown — origin/HEAD unset)",
-      "**CI/CD deploy targets**: None configured",
-      "**Network posture**: local-only / no-egress by repo policy — CLAUDE.md states this repo never leaves the machine except via a gated VPS mirror sync and model API calls; local git only, no git remote is ever added to this repo",
-      "**Source control**: personal GitHub account `lashaws` (remotes under github.com/lashaws/*) for projects in __HOME__/dev. __HOME__/life-wiki is the exception — CLAUDE.md hard rule: never add a git remote to it, local git only. Some __HOME__/dev repos (grapevine, nestmap) intentionally have no remote — do not add one",
-      "**Trusted internal domains**: None configured",
-      "**Trusted cloud buckets**: None configured",
-      "**Key internal services**: VPS mirror host referenced in repo docs (lashaws@srv1440810, OpenClaw/Bernard companion) — repo-authored documentation only, not usage-corroborated; treat as context, not a trusted operational target",
-      "**Internal package registry**: None configured",
-      "**Sensitive data locations & audiences**: This repo is a personal health/life record (pseudonymized full health history, PII, journal, finance, housing data) under `wikis/` — per CLAUDE.md, health data is cited and mirror-scoped only to `wikis/health/`, `wikis/shared/`, `wikis/journal/wiki/entries/` for the gated VPS companion (Bernard) serving the patient and family over WhatsApp; finance/housing/work, ingest/, raw transcripts, and audio are explicitly out of mirror scope and must never egress; audio files (.m4a/.mp3/.wav/.mp4/.aac) must never be committed",
-      "**Data retention / declassification**: None configured",
-      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment — plus, per this repo's own hard rules, the VPS mirror sync is the only sanctioned egress path and is leak-scan gated; any other push/network egress from this repo is out of policy",
-      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
-      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
-      "### User-specific",
-      "**Primary use of Claude Code**: personal life-wiki curation (health, finance, housing, work, journal) plus personal software projects under __HOME__/dev (Quarry Postgres client, Facebook/Reddit research miners, house designer, Tab Slumber, caregiver screener, etc.) for a single human owner",
-      "**Trusted repo**: __HOME__/life-wiki (no remotes, local git only — never add a remote or push) and the personal project repos under __HOME__/dev (same directory as __HOME__/Dev — the filesystem is case-insensitive)",
-      "**Org-specific CLIs**: `bd` (Beads issue tracker, used routinely — 61× in recent transcripts)",
-      "**Routine under this repo's `.claude/scripts/` and `.claude/skills/` prefixes**: session-context, wiki-lint-structural, wiki-query, graph-insights, vps-mirror-sync, nightly-leak-scan, and other repo-defined maintenance scripts are routine, repo-scoped tooling",
-      "**Sensitive local data outside repos**: __HOME__/dev-archive/sensitive-review/ (unrotated credentials and regulated data pending rotation then deletion) — never copy or egress"
-    ]
-  },
   "feedbackSurveyState": {
     "lastShownTime": 1753967179724
   },
