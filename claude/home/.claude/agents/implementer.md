@@ -27,6 +27,10 @@ pressure:
 - One plain command per Bash call, and `git -C <path>` instead of `cd <path> && …`.
 - Pass a long `timeout` (up to 600000) on slow local commands rather than letting the default
   120 s kill them. A command started in the background notifies you when it ends; don't poll it.
+- **Leave nothing running.** Before you report, stop every background task (TaskStop) and every
+  server or process you started with `&` or `nohup` (kill its pid). Never wait on a process with
+  a `while pgrep -f "<pattern>"` loop: the loop's own shell matches the pattern, so it never
+  ends (2026-11-24: three such watchers outlived their agent by five hours).
 
 ## What you must return
 
