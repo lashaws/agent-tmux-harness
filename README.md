@@ -89,6 +89,19 @@ history, transcripts and memory (`projects/`), plugin caches, and skills synced 
 claude.ai or installed by other tools (`skills/synced`, `google-agents-cli-*`).
 Needs `jq`, `python3`, `tmux` and `gh` (the install names any that are missing).
 
+## Multiple Claude accounts
+
+A second (or third) account can share the whole `~/.claude` harness. List accounts in `~/.claude/local/accounts.tsv` (local, mode 600, never captured): `name<TAB>config_dir[<TAB>manual]`, first = default, order = rotation order; `manual` accounts are used only when pinned, never by auto-rotation. The default account always runs with `CLAUDE_CONFIG_DIR` unset; the others get a config dir of symlinks to `~/.claude` (account-tied files such as `.claude.json`, caches and policy files stay separate).
+
+| Command | What it does |
+|---|---|
+| `ca` | Accounts, signed-in email, last recorded 5h/7d usage, current mode |
+| `ca login <name>` | Links the harness and runs `claude auth login` for that account |
+| `ca <name>` (or `use <name>`; unique prefix ok) / `next` / `auto` | Pin an account, pin the next one, or return to auto-rotation |
+| `CLAUDE_ACCOUNT=<name> claude` | One-off override |
+
+Auto mode uses the first account whose 5h and 7d usage are both under `CLAUDE_ACCOUNT_THRESHOLD` (default 90%), reading usage the status line records. Sessions under `~/work` stay pinned to their own account and are never rotated.
+
 ## iTerm setup (one-time, manual)
 
 This is deliberately not scripted. iTerm keeps its preferences in memory and

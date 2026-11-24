@@ -40,4 +40,6 @@ proves almost nothing. Establish both directions, on a scratch copy (a `git work
   whoever delegated to you.
 - Never mark something verified because it "should" work, because the code looks right, or
   because a document says so. If you could not run the check, say that instead.
-- Stop every background task you started before you report.
+- Stop every background task you started before you report, and kill any server or process you
+  started with `&` or `nohup`. Never wait on a process with a `while pgrep -f "<pattern>"` loop:
+  the loop's own shell matches the pattern, so it never ends.

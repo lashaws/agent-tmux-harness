@@ -1,17 +1,29 @@
 # claude.zsh — Claude Code shell wiring (tracked in ~/dotfiles/claude/home/.zsh/claude.zsh).
 
-# --- Claude Code: separate account for ~/work (added 2026-08-25) ---
-# Sessions started anywhere under ~/work use their own config dir, which gives
-# them their own macOS Keychain credential item ("Claude Code-credentials-<hash>").
-# Everything else — including all launchd/cron automation, which never sources
-# .zshrc — keeps using ~/.claude and the default login.
+# --- Claude Code accounts ---
+# Sessions started anywhere under ~/work use their own config dir (~/.claude-work), which
+# gives them their own macOS Keychain credential item. Everywhere else,
+# account rotation applies: `claude-account pick` (accounts in ~/.claude/local/accounts.tsv)
+# chooses the account, pinned or auto-rotated when usage nears the threshold. The default
+# account must run with CLAUDE_CONFIG_DIR UNSET (its login lives in the default Keychain
+# item); other accounts share ~/.claude's harness through symlinks. Launchd/cron automation
+# never sources .zshrc and keeps using ~/.claude.
 claude() {
-  if [[ -z "$CLAUDE_CONFIG_DIR" && "$PWD" == "$HOME/work"(|/*) ]]; then
+  if [[ -n "$CLAUDE_CONFIG_DIR" ]]; then
+    command claude "$@"
+  elif [[ "$PWD" == "$HOME/work"(|/*) ]]; then
     CLAUDE_CONFIG_DIR="$HOME/.claude-work" command claude "$@"
   else
-    command claude "$@"
+    local dir
+    dir=$("$HOME/.claude/bin/claude-account" pick)
+    if [[ -n "$dir" ]]; then
+      CLAUDE_CONFIG_DIR="$dir" command claude "$@"
+    else
+      command claude "$@"
+    fi
   fi
 }
+alias ca="$HOME/.claude/bin/claude-account"
 
 # Attach-or-create one tmux session per Claude account. Starting each session
 # with -c pins its base dir, so every pane (prefix c / | / - / % / ") inherits a

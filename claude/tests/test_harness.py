@@ -132,6 +132,24 @@ check("nested: a finished agent's subtree is not counted", ss.state_of(str(ntr),
 (sub / "agent-ddd.jsonl").write_text(json.dumps(side(a_tool("d1", "sleep 5"))) + "\n" + json.dumps(side(u_res("d1", "bgd1"))) + "\n" + json.dumps(side(agent_res("d2", "eee"))) + "\n")
 check("nested: cache picks up appended lines", ss.state_of(str(ntr), idle=True)[0], "⏳ 2 agents · 1 shell")
 
+# --- subagent-background-tasks.sh: one rule at both exits (SubagentStop and the SubagentHandback tool)
+hb_env = {**os.environ, "SESSION_STATE": str(B / "session-state"), "TMPDIR": str(tmp) + "/"}
+def guard(payload):
+    p = subprocess.run([str(B.parent / "hooks/subagent-background-tasks.sh")], input=json.dumps(payload), capture_output=True, text=True, env=hb_env)
+    if not p.stdout.strip():
+        return "allow"
+    j = json.loads(p.stdout)
+    return j.get("reason") or j["hookSpecificOutput"]["permissionDecisionReason"]
+hb = {"hook_event_name": "PreToolUse", "tool_name": "SubagentHandback", "session_id": "nest-1", "transcript_path": str(ntr), "agent_id": "ddd"}
+check("handback: open task denies, path derived from main transcript", "bgd1" in guard(hb), True)
+check("handback: same ids again is allowed", guard(hb), "allow")
+check("handback: main thread is allowed", guard({k: v for k, v in hb.items() if k != "agent_id"}), "allow")
+check("handback: missing transcript fails open", guard({**hb, "agent_id": "nope"}), "allow")
+st_ = {"hook_event_name": "SubagentStop", "agent_id": "ddd", "agent_transcript_path": str(sub / "agent-ddd.jsonl"), "stop_hook_active": False}
+check("stop: open task blocks", "bgd1" in guard(st_), True)
+check("stop: stop_hook_active passes", guard({**st_, "stop_hook_active": True}), "allow")
+check("stop: no open tasks passes", guard({**st_, "agent_transcript_path": str(sub / "agent-ccc.jsonl")}), "allow")
+
 # --- Stop gates
 it = item("abc123", "gcloud auth login", note="signs in")
 d = {"session_id": "s"}

@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Claude Code multi-account switcher (accounts share one harness, ~/.claude).
+
+  claude-account [status]     accounts, sign-ins, last recorded usage, mode (no network)
+  claude-account <name>       same as `use <name>`; any unique prefix works (asc, g, q)
+  claude-account use <name>   pin an account
+  claude-account auto         unpin; rotate when usage nears the threshold
+  claude-account next         pin the account after the selected one (wraps)
+  claude-account pick         config dir the `claude` wrapper should use (empty = default)
+  claude-account link [name]  symlink the shared harness into non-default config dirs
+  claude-account record       status-line JSON on stdin -> usage record (silent)
+  claude-account current      account name for $CLAUDE_CONFIG_DIR (empty if unlisted)
+  claude-account login <name> [args]   claude auth login for that account
+
+Accounts: ~/.claude/local/accounts.tsv, `name<TAB>config_dir[<TAB>manual]`, first = default
+(its CLAUDE_CONFIG_DIR must stay unset). `manual` accounts are used only when pinned or named,
+never picked by auto rotation. Env: CLAUDE_ACCOUNT (one-off override),
+CLAUDE_ACCOUNT_THRESHOLD (percent, default 90).
+"""
+import fnmatch
+import json
+import os
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+BASE = os.path.join(HOME, ".claude")
+STATE = os.path.join(BASE, "state", "claude-account")
+MODE = os.path.join(STATE, "mode")
+TSV = os.path.join(BASE, "local", "accounts.tsv")
+
+DENY = [".claude.json*", ".credentials.json", "policy-limits.json*", "remote-settings.json*",
+        "cache", "statsig", "telemetry", "daemon", "daemon.log", "debug", "stats-cache.json",
+        "mcp-needs-auth-cache.json", ".last-update-result.json", ".last-cleanup", ".DS_Store",
+        ".cc-writes", "backups", "bridge-spawn", "child-logs", "jobs", "scheduled",
+        "seed-admin", "*.bak*"]
+SEED_KEYS = ["projects", "hasCompletedOnboarding", "lastOnboardingVersion",
+             "lastReleaseNotesSeen", "installMethod", "autoUpdates",
+             "autoUpdatesProtectedForNative", "shiftEnterKeyBindingInstalled",
+             "hasIdeOnboardingBeenShown", "tipsHistory", "theme", "editorMode",
+             "showSpinnerTree", "githubRepoPaths", "deepLinkTerminal"]
+
+
+MANUAL = set()
+
+
+def real(p):
+    return os.path.realpath(os.path.expanduser(p))
+
+
+def accounts():
+    out = []
+    try:
+        for line in open(TSV):
+            line = line.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                if len(parts) >= 3 and parts[2].strip() == "manual":
+                    MANUAL.add(parts[0].strip())
+                out.append((parts[0].strip(), real(parts[1].strip())))
+    except OSError:
+        pass
+    return out
+
+
+def is_default(d):
+    return d == real(BASE)
+
+
+def find(accts, name):
+    """Exact name, else a unique prefix."""
+    if not name:
+        return None
+    for n, d in accts:
+        if n == name:
+            return n, d
+    hits = [(n, d) for n, d in accts if n.startswith(name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def read_mode():
+    try:
+        return open(MODE).read().strip()
+    except OSError:
+        return ""
+
+
+def write_mode(v):
+    os.makedirs(STATE, exist_ok=True)
+    atomic(MODE, v + "\n" if v else "")
+
+
+def atomic(path, text, mode=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    if mode:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def usage(name):
+    try:
+        return json.load(open(os.path.join(STATE, "usage-%s.json" % name)))
+    except (OSError, ValueError):
+        return None
+
+
+def fmt_time(ts):
+    t = time.localtime(ts)
+    now = time.localtime()
+    fmt = "%-I%p" if t.tm_yday == now.tm_yday and t.tm_year == now.tm_year else "%a %-I%p"
+    if t.tm_min:
+        fmt = fmt.replace("%p", ":%M%p")
+    return time.strftime(fmt, t).lower()
+
+
+def age(sec):
+    sec = int(sec)
+    if sec < 90:
+        return "%ds" % sec
+    if sec < 5400:
+        return "%dm" % (sec // 60)
+    if sec < 172800:
+        return "%dh" % (sec // 3600)
+    return "%dd" % (sec // 86400)
+
+
+def windows(rec, now):
+    """[(label, effective pct, resets_at)]; an elapsed window counts as 0."""
+    out = []
+    for label, p, r in (("5h", "h5", "h5_reset"), ("7d", "d7", "d7_reset")):
+        pct, reset = rec.get(p), rec.get(r)
+        if pct is None:
+            continue
+        if reset is not None and reset <= now:
+            pct = 0
+        out.append((label, float(pct), reset))
+    return out
+
+
+def email_of(d):
+    path = os.path.join(HOME, ".claude.json") if is_default(d) else os.path.join(d, ".claude.json")
+    try:
+        return json.load(open(path)).get("oauthAccount", {}).get("emailAddress") or "not signed in"
+    except (OSError, ValueError, AttributeError):
+        return "not signed in"
+
+
+def selected(accts):
+    """(account, reason) honoring env > pinned > auto."""
+    env = os.environ.get("CLAUDE_ACCOUNT", "")
+    if env and find(accts, env):
+        return find(accts, env), None
+    pin = read_mode()
+    if pin and find(accts, pin):
+        return find(accts, pin), None
+    try:
+        thr = float(os.environ.get("CLAUDE_ACCOUNT_THRESHOLD", "90"))
+    except ValueError:
+        thr = 90.0
+    now = time.time()
+    best, best_reset, first_why = None, None, None
+    for i, (n, d) in enumerate([x for x in accts if x[0] not in MANUAL] or accts[:1]):
+        rec = usage(n)
+        ws = windows(rec, now) if rec else []
+        blocking = [w for w in ws if w[1] >= thr]
+        if not blocking:
+            return (n, d), first_why
+        if i == 0:
+            w = blocking[0]
+            first_why = "%s %s %d%% (resets %s)" % (n, w[0], round(w[1]), fmt_time(w[2]) if w[2] else "?")
+        soon = max((w[2] or 0) for w in blocking)
+        if best is None or soon < best_reset:
+            best, best_reset = (n, d), soon
+    return best, first_why
+
+
+def cmd_pick(accts):
+    try:
+        if not accts:
+            return
+        sel, why = selected(accts)
+        if not sel:
+            return
+        n, d = sel
+        if why and n != accts[0][0]:
+            sys.stderr.write("claude-account: %s → %s\n" % (why, n))
+        if is_default(d):
+            print("")
+            return
+        link_one(d)
+        print(d)
+    except Exception:
+        print("")
+
+
+def link_one(d, quiet=True):
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    base = real(BASE)
+    for e in os.listdir(d):  # dangling symlinks we own
+        p = os.path.join(d, e)
+        if os.path.islink(p) and not os.path.exists(p) and os.readlink(p).startswith(base + "/"):
+            os.unlink(p)
+    for e in sorted(os.listdir(base)):
+        if any(fnmatch.fnmatch(e, g) for g in DENY):
+            continue
+        src, dst = os.path.join(base, e), os.path.join(d, e)
+        if os.path.islink(dst):
+            if os.readlink(dst) == src:
+                continue
+            os.unlink(dst)
+        elif os.path.lexists(dst):
+            sys.stderr.write("claude-account: %s exists and is not a link; left alone\n" % dst)
+            continue
+        os.symlink(src, dst)
+    seed = os.path.join(d, ".claude.json")
+    if not os.path.exists(seed):
+        try:
+            src = json.load(open(os.path.join(HOME, ".claude.json")))
+        except (OSError, ValueError):
+            src = {}
+        out = {k: v for k, v in src.items() if k in SEED_KEYS or k.endswith("MigrationComplete")}
+        atomic(seed, json.dumps(out, indent=2) + "\n", 0o600)
+
+
+def cmd_link(accts, name):
+    targets = [find(accts, name)] if name else [a for a in accts if not is_default(a[1])]
+    if None in targets:
+        sys.exit("claude-account: unknown account %s" % name)
+    for n, d in targets:
+        if is_default(d):
+            continue
+        link_one(d)
+
+
+def cmd_status(accts):
+    sel, _ = selected(accts)
+    now = time.time()
+    for n, d in accts:
+        rec = usage(n)
+        if rec:
+            parts = []
+            for label, pct, reset in windows(rec, now):
+                parts.append("%s %d%%%s" % (label, round(pct), " (resets %s)" % fmt_time(reset) if reset else ""))
+            u = ", ".join(parts) + " [%s ago]" % age(now - rec.get("ts", now))
+        else:
+            u = "no usage recorded"
+        shown = d.replace(HOME, "~") + (" (manual)" if n in MANUAL else "")
+        print("%s %-9s %-29s %-26s %s" % ("*" if sel and sel[0] == n else " ", n, shown, email_of(d), u))
+    pin = read_mode()
+    mode = "pinned " + pin if pin and find(accts, pin) else "auto"
+    if os.environ.get("CLAUDE_ACCOUNT"):
+        mode += " (CLAUDE_ACCOUNT=%s override)" % os.environ["CLAUDE_ACCOUNT"]
+    print("mode: " + mode)
+
+
+def cmd_record():
+    try:
+        data = json.load(sys.stdin)
+        rl = data.get("rate_limits") or {}
+        cur = current_name(accounts())
+        if not cur or not rl:
+            return
+        f, s = rl.get("five_hour") or {}, rl.get("seven_day") or {}
+        rec = {"h5": f.get("used_percentage"), "h5_reset": f.get("resets_at"),
+               "d7": s.get("used_percentage"), "d7_reset": s.get("resets_at"), "ts": int(time.time())}
+        atomic(os.path.join(STATE, "usage-%s.json" % cur), json.dumps(rec))
+    except Exception:
+        pass
+
+
+def current_name(accts):
+    d = real(os.environ.get("CLAUDE_CONFIG_DIR") or BASE)
+    for n, ad in accts:
+        if ad == d:
+            return n
+    return ""
+
+
+SUBS = {"record", "pick", "current", "status", "link", "use", "auto", "next", "login"}
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "status"
+    accts = accounts()
+    if cmd == "record":
+        return cmd_record()
+    if cmd == "pick":
+        return cmd_pick(accts)
+    if cmd == "current":
+        print(current_name(accts))
+    elif cmd == "status":
+        cmd_status(accts)
+    elif cmd == "link":
+        cmd_link(accts, a[1] if len(a) > 1 else None)
+    elif cmd == "use" or (cmd not in SUBS and find(accts, cmd)):
+        want = a[1] if cmd == "use" and len(a) > 1 else (cmd if cmd != "use" else "")
+        hit = find(accts, want)
+        if not hit:
+            sys.exit("claude-account: use <name>; names: " + " ".join(n for n, _ in accts))
+        write_mode(hit[0])
+        print("pinned %s (%s)" % (hit[0], email_of(hit[1])))
+    elif cmd == "auto":
+        write_mode("")
+        print("auto")
+    elif cmd == "next":
+        if not accts:
+            sys.exit("claude-account: no accounts")
+        sel, _ = selected(accts)
+        names = [n for n, _ in accts]
+        nxt = names[(names.index(sel[0]) + 1) % len(names)] if sel else names[0]
+        write_mode(nxt)
+        print("pinned %s (%s)" % (nxt, email_of(find(accts, nxt)[1])))
+    elif cmd == "login":
+        if len(a) < 2 or not find(accts, a[1]):
+            sys.exit("claude-account: login <name>; names: " + " ".join(n for n, _ in accts))
+        n, d = find(accts, a[1])
+        env = dict(os.environ)
+        if is_default(d):
+            env.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            link_one(d)
+            env["CLAUDE_CONFIG_DIR"] = d
+        os.execvpe("claude", ["claude", "auth", "login"] + a[2:], env)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

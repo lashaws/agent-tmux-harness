@@ -1,4 +1,5 @@
 {
+  "cleanupPeriodDays": 3650,
   "env": {
     "CLAUDE_CODE_TMUX_TRUECOLOR": "1",
     "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
@@ -142,24 +143,34 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/subagent-background-tasks.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/local-layer.sh pre-tool-use",
             "timeout": 5
           }
-        ],
-        "matcher": "Bash|Edit|Write|MultiEdit"
+        ]
       },
       {
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/guard-instruction-size.py",
             "timeout": 5
           }
-        ],
-        "matcher": "Edit|Write|MultiEdit"
+        ]
       }
     ]
   },
@@ -195,5 +206,5 @@
   "feedbackSurveyState": {
     "lastShownTime": 1753967179724
   },
-  "cleanupPeriodDays": 3650
+  "tui": "fullscreen"
 }

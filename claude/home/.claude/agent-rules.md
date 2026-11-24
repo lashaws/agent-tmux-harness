@@ -27,8 +27,7 @@ subagents, SendMessage), use your tool's nearest equivalent.
   observed it and its output. Config isn't behavior; a doc isn't the system.
 - **Walk Lashaw through human steps.** When a step needs a person (sign-in, MFA, a web console,
   a desktop app), use the `walkthrough` skill: Lashaw does only the sign-in; you drive the rest.
-- **Plans by dependency, never dates.** Use the `plan-visual` skill: tiers, not a calendar, and
-  an HTML visual for big plans.
+- **Plans by dependency, never dates.** Order steps by what blocks what, not by a calendar.
 - **Automation fixes or blocks, never just reports.** "Automated" means one command does the
   whole job, not a schedule. Add cron, launchd or cloud routines only when Lashaw names one.
 - **Harness fixes trigger themselves.** When Lashaw keeps asking for something, the fix fires on
