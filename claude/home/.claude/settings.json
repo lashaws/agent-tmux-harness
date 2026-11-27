@@ -128,6 +128,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/focus-guard start >/dev/null 2>&1",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -168,6 +177,16 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/guard-instruction-size.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/stamp-app-launch.sh",
             "timeout": 5
           }
         ]

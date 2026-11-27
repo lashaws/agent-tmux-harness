@@ -1,0 +1,31 @@
+#!/bin/bash
+# focus-guard: keeps agent-launched apps (agent Chrome, Playwright, Electron dev builds, apps
+# started by claude/codex/gemini) from stealing keyboard focus. Source: focus-guard.swift next to
+# this file; the built binary, log state and stamps live in ~/.claude/local/focus-guard/.
+#   focus-guard start        build if needed and run in the background (SessionStart does this)
+#   focus-guard status       running or not, plus the last blocks
+#   focus-guard stop
+#   focus-guard pause [s]    let agent apps take focus for s seconds (default 120), e.g. while
+#                            Lashaw signs in during a walkthrough
+#   focus-guard log          follow the log
+set -euo pipefail
+SRC="$(dirname "$0")/focus-guard.swift"; DIR="$HOME/.claude/local/focus-guard"; BIN="$DIR/focus-guard-bin"; LOG="$HOME/Library/Logs/focus-guard.log"
+pid() { pgrep -f "^$BIN\$" | head -1; }
+case "${1:-status}" in
+  start)
+    [ "$(uname)" = Darwin ] || exit 0
+    mkdir -p "$DIR"
+    if [ ! -x "$BIN" ] || [ "$SRC" -nt "$BIN" ]; then
+      [ -n "$(pid)" ] && kill "$(pid)"
+      swiftc -O "$SRC" -o "$BIN" 2>"$DIR/build.err" || { cat "$DIR/build.err" >&2; exit 1; }
+    fi
+    [ -n "$(pid)" ] && { echo "running (pid $(pid))"; exit 0; }
+    nohup "$BIN" >/dev/null 2>&1 </dev/null & disown
+    sleep 0.3; echo "started (pid $(pid))" ;;
+  status) if [ -n "$(pid)" ]; then echo "running (pid $(pid))"; else echo "not running"; fi
+          tail -5 "$LOG" 2>/dev/null || true ;;
+  stop) [ -n "$(pid)" ] && kill "$(pid)" && echo stopped || echo "not running" ;;
+  pause) mkdir -p "$DIR"; echo $(( $(date +%s) + ${2:-120} )) > "$DIR/paused-until"; echo "paused for ${2:-120}s" ;;
+  log) exec tail -f "$LOG" ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
+esac
