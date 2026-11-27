@@ -35,7 +35,6 @@ _tsess() {  # $1=session name  $2=base dir
   if [ -n "$TMUX" ]; then tmux switch-client -t "$1"; else tmux attach-session -t "$1"; fi
 }
 twork() { _tsess work "$HOME/work/quantum"; }
-twiki() { _tsess wiki "$HOME/life-wiki"; }
 
 # your-turn: mark handed-over commands done when Lashaw runs them in tmux.
 [ -f ~/.zsh/your-turn-watch.zsh ] && source ~/.zsh/your-turn-watch.zsh

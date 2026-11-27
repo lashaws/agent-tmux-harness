@@ -196,7 +196,7 @@ cmd_install() {
 
   # Shell: source claude.zsh after tmux-last-output.zsh (your-turn-watch needs its stamps).
   if ! grep -q 'zsh/claude.zsh' "$HOME/.zshrc" 2>/dev/null; then
-    printf '\n# --- Claude Code: work/personal account switch, twork/twiki, your-turn watcher ---\n[ -f ~/.zsh/claude.zsh ] && source ~/.zsh/claude.zsh\n' >> "$HOME/.zshrc"
+    printf '\n# --- Claude Code: work/personal account switch, twork, your-turn watcher ---\n[ -f ~/.zsh/claude.zsh ] && source ~/.zsh/claude.zsh\n' >> "$HOME/.zshrc"
     echo "  added the claude.zsh source line to ~/.zshrc"
   fi
 
