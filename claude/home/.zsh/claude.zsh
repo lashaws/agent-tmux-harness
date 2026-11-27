@@ -1,4 +1,4 @@
-# claude.zsh — Claude Code shell wiring (tracked in ~/dotfiles/claude/home/.zsh/claude.zsh).
+# claude.zsh — Claude Code shell wiring (tracked in ~/Dev/agent-tmux-harness/claude/home/.zsh/claude.zsh).
 
 # --- Claude Code accounts ---
 # Sessions started anywhere under ~/work use their own config dir (~/.claude-work), which

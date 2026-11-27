@@ -11,9 +11,8 @@ Requires [Homebrew](https://brew.sh) and the GitHub CLI (`brew install gh`, then
 ```bash
 mkdir -p ~/Dev
 gh repo clone lashaws/agent-tmux-harness ~/Dev/agent-tmux-harness
-ln -s ~/Dev/agent-tmux-harness ~/dotfiles     # the harness's own scripts and notes use ~/dotfiles
-bash ~/dotfiles/terminal-setup.sh
-bash ~/dotfiles/claude/harness.sh install
+bash ~/Dev/agent-tmux-harness/terminal-setup.sh
+bash ~/Dev/agent-tmux-harness/claude/harness.sh install
 ```
 
 Then sign in to each Claude account once: `claude` in your home folder (personal) and
@@ -24,7 +23,7 @@ Quit iTerm once with `Cmd-Q` and reopen it afterwards.
 ## Existing machine — pull latest and re-apply
 
 ```bash
-bash ~/dotfiles/update.sh
+bash ~/Dev/agent-tmux-harness/update.sh
 ```
 
 That pulls from GitHub and re-runs the setup. It is safe to run repeatedly:
@@ -37,7 +36,7 @@ Edit the files here, then push so every other machine can pick them up. For the 
 harness, edit the live files as usual and run `bash claude/harness.sh capture` first.
 
 ```bash
-cd ~/dotfiles
+cd ~/Dev/agent-tmux-harness
 git add -A && git commit -m "describe the change" && git push
 ```
 
