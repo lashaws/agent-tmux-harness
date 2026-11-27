@@ -67,7 +67,10 @@ It does **not** touch iTerm settings. See below.
 `settings.json` (hooks, permissions, plugins, status line), `hooks/`, `bin/`
 (your-turn, session-state, sleep-mode), agents, personal skills, themes, the status
 lines, `~/.zsh/claude.zsh` (account switch, `twork`), `~/.zsh/your-turn-watch.zsh`
-and the doc-steward launch agent. `claude/home/` holds them at their `$HOME`-relative paths,
+and the doc-steward launch agent. `bin/focus-guard` (started at every session start, built from
+`focus-guard.swift` with the Xcode tools' `swiftc`, no permissions needed) keeps apps that agents
+open, like test browsers and Electron builds, behind the window you're using: if one comes forward
+without a click or cmd-tab from you, focus goes back to your app. `claude/home/` holds them at their `$HOME`-relative paths,
 with your home folder written as `__HOME__` so a different macOS user name still works.
 
 | Command | What it does |

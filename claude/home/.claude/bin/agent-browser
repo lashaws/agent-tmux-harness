@@ -43,7 +43,8 @@ case "$cmd" in
     fi
     mkdir -p "$PROFILE"; chmod 700 "$(dirname "$PROFILE")"
     # With the same --user-data-dir, a second launch hands the URL to the running window.
-    open -na "$CHROME_APP" --args --user-data-dir="$PROFILE" --remote-debugging-port="$PORT" \
+    # -g: open behind whatever Lashaw is using (focus-guard catches any later activation).
+    open -gna "$CHROME_APP" --args --user-data-dir="$PROFILE" --remote-debugging-port="$PORT" \
       --no-first-run --no-default-browser-check ${url:+"$url"}
     for _ in $(seq 40); do up && break; sleep 0.5; done
     up || { echo "Chrome did not open its debug port within 20 s" >&2; exit 1; }

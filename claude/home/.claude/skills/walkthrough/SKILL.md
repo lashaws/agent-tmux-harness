@@ -26,7 +26,8 @@ Scripts that exit lose that state.
    Node >= 22, no dependencies. It attaches if Chrome already listens on the chrome port, else launches it.
    Set `CHROME_BIN` for a non-default Chrome path. Omit `--headless` when Lashaw must sign in.
 4. Ask for the sign-in in your reply, one line: which window, what to sign in with. Prefilling the email
-   is fine. Wait for the page to show signed in (check with `/eval`); never ask "did you sign in?". If you poll for the sign-in with a background command, end it with `# waits on Lashaw` so the status line shows 👤.
+   is fine. On macOS, `~/.claude/bin/focus-guard` keeps the window behind whatever Lashaw is using,
+   so name it ("click the Chrome window"), or run `focus-guard pause 600` first. Wait for the page to show signed in (check with `/eval`); never ask "did you sign in?". If you poll for the sign-in with a background command, end it with `# waits on Lashaw` so the status line shows 👤.
 
 ## 2. Drive it with curl
 
@@ -61,7 +62,8 @@ Errors return HTTP 500 with `{"error":...}`. Read the screenshot (Read tool on t
   hang). Before concluding the app is broken, wrap the element's `__reactProps$...` `onClick` to log, then click.
   A stale earlier navigation or state seeded before an async fetch lands often looks like a dropped query string.
 - **Background windows** ignore dispatched events on dialogs: `button.click()` via `/eval` works for plain
-  buttons. Send `Page.bringToFront` and `Emulation.setFocusEmulationEnabled` when focus matters.
+  buttons. Send `Emulation.setFocusEmulationEnabled` when focus matters; `Page.bringToFront` is undone by
+  focus-guard unless Lashaw is already in that window.
 - **Virtual authenticator (passkeys):** hold ONE session (this driver does); it dies with its session. Then
   `WebAuthn.addVirtualAuthenticator` via `/cdp`.
 - **Probe after a change with a page load**, not only `fetch`: server layouts often run only on page loads.
