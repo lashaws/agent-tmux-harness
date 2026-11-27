@@ -66,7 +66,7 @@ It does **not** touch iTerm settings. See below.
 `claude/manifest.txt` lists every hand-made piece of both accounts: `CLAUDE.md`,
 `settings.json` (hooks, permissions, plugins, status line), `hooks/`, `bin/`
 (your-turn, session-state, sleep-mode), agents, personal skills, themes, the status
-lines, `~/.zsh/claude.zsh` (account switch, `twork`/`twiki`), `~/.zsh/your-turn-watch.zsh`
+lines, `~/.zsh/claude.zsh` (account switch, `twork`), `~/.zsh/your-turn-watch.zsh`
 and the doc-steward launch agent. `claude/home/` holds them at their `$HOME`-relative paths,
 with your home folder written as `__HOME__` so a different macOS user name still works.
 
