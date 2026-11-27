@@ -1,6 +1,6 @@
 """Behaviour tests for the Claude Code harness scripts (~/.claude/bin/your-turn, session-state).
 
-Run: python3 -I ~/dotfiles/claude/tests/test_harness.py   (harness.sh capture runs it first)
+Run: python3 -I ~/Dev/agent-tmux-harness/claude/tests/test_harness.py   (harness.sh capture runs it first)
 Everything happens in a throwaway config dir; the live ~/.claude and ~/.claude-work are never touched.
 """
 import json, os, subprocess, sys, tempfile, time
